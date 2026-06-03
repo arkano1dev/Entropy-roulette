@@ -8,6 +8,7 @@ interface ResultWinnerProps {
   totalPot: number;
   txid: string;
   calculation: string;
+  receivingAddress?: string;
   onSweep?: () => void;
 }
 
@@ -16,6 +17,7 @@ export function ResultWinner({
   totalPot,
   txid,
   calculation,
+  receivingAddress,
   onSweep,
 }: ResultWinnerProps) {
   return (
@@ -105,9 +107,20 @@ export function ResultWinner({
           <div className="font-mono text-xs text-muted-foreground mb-1">
             ENTROPY CALCULATION
           </div>
-          <div className="font-mono text-sm text-neon/70 break-all">
+          <div className="font-mono text-sm text-neon/70 break-all mb-4">
             {calculation}
           </div>
+
+          {receivingAddress && (
+            <>
+              <div className="font-mono text-xs text-muted-foreground mb-1">
+                FUNDS SENT TO
+              </div>
+              <div className="font-mono text-sm text-memphis/70 break-all">
+                {receivingAddress}
+              </div>
+            </>
+          )}
         </div>
 
         {/* TXID */}

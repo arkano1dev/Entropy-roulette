@@ -20,12 +20,8 @@ import {
   buildUnifiedPsbt,
   calculateWinner,
 } from "@/lib/bitcoin/psbt-engine";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-
-// Simulate the presenter address - in production this would come from wallet
-const DEFAULT_POT_ADDRESS = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
 
 type PresenterMode = "setup" | "educate" | "game";
 
@@ -58,7 +54,6 @@ export default function PresenterPage() {
   >([]);
   const [blockHeight, setBlockHeight] = useState<number | null>(null);
   const [feeRate, setFeeRate] = useState<number>(10);
-  const [potAddress, setPotAddress] = useState(DEFAULT_POT_ADDRESS);
   const [txid, setTxid] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const [showEducation, setShowEducation] = useState(true);
@@ -97,9 +92,9 @@ export default function PresenterPage() {
   const handleInitialize = async () => {
     try {
       addLog("system", "Initializing entropy field...");
-      const newSession = await initializeGame(potAddress);
+      const newSession = await initializeGame();
       addLog("success", `Game created: ${newSession.id.toUpperCase()}`);
-      addLog("info", `Pot address: ${potAddress.slice(0, 20)}...`);
+      addLog("info", "Winner will receive funds to their connected wallet");
       setMode("educate");
       longPulse();
     } catch (err) {
@@ -131,13 +126,15 @@ export default function PresenterPage() {
     longPulse();
   };
 
-  // Handle PSBT finalization
+  // Handle PSBT finalization - winner address will be determined after TXID entropy
   const handleFinalize = async () => {
-    if (!session) return;
+    if (!session || session.players.length === 0) return;
 
     try {
       addLog("system", "Building unified PSBT...");
-      const unifiedPsbt = buildUnifiedPsbt(session.players, potAddress, feeRate);
+      // Use first player's address as placeholder - actual winner determined by TXID
+      const placeholderAddress = session.players[0].receivingAddress;
+      const unifiedPsbt = buildUnifiedPsbt(session.players, placeholderAddress, feeRate);
       addLog("info", `PSBT has ${session.players.length} inputs`);
 
       const { rawTx, txid: finalTxid } = finalizePsbt(unifiedPsbt);
@@ -188,6 +185,10 @@ export default function PresenterPage() {
           addLog(
             "success",
             `WINNER: ${winner.displayName} (Index ${winnerIndex})`
+          );
+          addLog(
+            "info",
+            `Funds sent to: ${winner.receivingAddress.slice(0, 20)}...`
           );
 
           await confirmAndResolve(txid);
@@ -240,16 +241,14 @@ export default function PresenterPage() {
           </p>
 
           <div className="space-y-6">
-            <div>
-              <label className="font-mono text-xs text-muted-foreground block mb-2">
-                POT ADDRESS (Winner receives funds here)
-              </label>
-              <Input
-                value={potAddress}
-                onChange={(e) => setPotAddress(e.target.value)}
-                placeholder="bc1q..."
-                className="font-mono text-sm"
-              />
+            <div className="p-4 bg-neon/10 border border-neon/30 rounded-lg">
+              <div className="font-mono text-sm text-neon mb-2">
+                HOW IT WORKS
+              </div>
+              <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                Players join with their Bitcoin wallet. The winner receives all funds
+                directly to their connected wallet address. No intermediary pot needed.
+              </p>
             </div>
 
             <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
@@ -272,7 +271,7 @@ export default function PresenterPage() {
 
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing || !potAddress}
+              disabled={isInitializing}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
@@ -513,7 +512,7 @@ export default function PresenterPage() {
                                 {player.displayName}
                               </div>
                               <div className="font-mono text-xs text-muted-foreground">
-                                {player.pubkey.slice(0, 12)}...
+                                {player.receivingAddress ? player.receivingAddress.slice(0, 16) + "..." : player.pubkey.slice(0, 12) + "..."}
                               </div>
                             </div>
                           </div>

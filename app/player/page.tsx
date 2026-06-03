@@ -88,18 +88,20 @@ function PlayerContent() {
     setStep("wallet");
   };
 
-  const handleWalletSign = async () => {
+  const handleWalletSign = async (receivingAddress: string) => {
     try {
       longPulse();
-      await joinGame(betAmount, displayName);
+      await joinGame(betAmount, receivingAddress, displayName);
       setStep("waiting");
     } catch (err) {
       console.error("Failed to join:", err);
     }
   };
 
-  const handleSignComplete = async (signedPsbt: string) => {
+  const handleSignComplete = async (signedPsbt: string, receivingAddress: string) => {
     try {
+      // First join with receiving address, then submit signature
+      await joinGame(betAmount, receivingAddress, displayName);
       await submitSignature(signedPsbt);
       setStep("waiting");
     } catch (err) {

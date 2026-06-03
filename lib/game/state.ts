@@ -72,7 +72,6 @@ export function createGameSession(presenterPubkey: string): GameSession {
     phase: "IDLE",
     presenterPubkey,
     players: [],
-    potAddress: "", // Will be set when presenter provides it
     feeRate: DEFAULT_CONFIG.feeRate,
     minBet: DEFAULT_CONFIG.minBet,
     maxBet: DEFAULT_CONFIG.maxBet,
@@ -85,7 +84,8 @@ export function addPlayer(
   session: GameSession,
   pubkey: string,
   displayName: string,
-  amount: number
+  amount: number,
+  receivingAddress: string
 ): GameSession {
   if (session.phase !== "LOBBY_OPEN") {
     throw new Error("Lobby is not open");
@@ -102,6 +102,7 @@ export function addPlayer(
     pubkey,
     displayName,
     amount,
+    receivingAddress,
     joinedAt: Date.now(),
   };
 
@@ -194,6 +195,12 @@ export function getPlayerByPubkey(
 export function getWinner(session: GameSession): Player | undefined {
   if (!session.winnerId) return undefined;
   return getPlayerById(session, session.winnerId);
+}
+
+// Get winner's receiving address
+export function getWinnerAddress(session: GameSession): string | undefined {
+  const winner = getWinner(session);
+  return winner?.receivingAddress;
 }
 
 // Create game result
