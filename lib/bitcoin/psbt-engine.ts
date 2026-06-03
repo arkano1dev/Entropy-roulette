@@ -22,14 +22,85 @@ export interface PSBTOutput {
   value: bigint;
 }
 
-// Create a new PSBT with the winner output
-export function createBasePsbt(winnerAddress: string): string {
+// Build PSBT for Transaction 1: all player inputs → single escrow output
+export function buildEscrowPsbt(
+  players: Player[],
+  escrowAddress: string,
+  feeRate: number
+): string {
   const psbt = new bitcoin.Psbt({ network });
 
-  // Add a placeholder output - actual value will be set after all inputs are added
+  let totalInput = BigInt(0);
+
+  // Add all player inputs
+  players.forEach((player) => {
+    if (player.utxo) {
+      psbt.addInput({
+        hash: player.utxo.txid,
+        index: player.utxo.vout,
+        witnessUtxo: {
+          script: Buffer.from(player.utxo.scriptPubKey, "hex"),
+          value: BigInt(player.utxo.value),
+        },
+      });
+      totalInput += BigInt(player.utxo.value);
+    }
+  });
+
+  if (psbt.inputCount === 0) {
+    throw new Error("No valid inputs provided");
+  }
+
+  // Calculate fee
+  const fee = BigInt(calculateFee(psbt.inputCount, feeRate));
+  const outputValue = totalInput - fee;
+
+  if (outputValue <= BigInt(0)) {
+    throw new Error("Insufficient funds for fee");
+  }
+
+  // Single output to escrow (presenter's address)
+  psbt.addOutput({
+    address: escrowAddress,
+    value: outputValue,
+  });
+
+  return psbt.toBase64();
+}
+
+// Build PSBT for Transaction 2: payout from escrow to winner
+export function buildPayoutPsbt(
+  escrowTxid: string,
+  escrowVout: number,
+  escrowValue: number,
+  escrowAddress: string,
+  winnerAddress: string,
+  feeRate: number
+): string {
+  const psbt = new bitcoin.Psbt({ network });
+
+  // Add escrow UTXO as input (presenter will sign this)
+  psbt.addInput({
+    hash: escrowTxid,
+    index: escrowVout,
+    witnessUtxo: {
+      script: bitcoin.address.toOutputScript(escrowAddress, network),
+      value: BigInt(escrowValue),
+    },
+  });
+
+  // Calculate fee for single-input single-output tx (~140 vbytes)
+  const fee = BigInt(calculateFee(1, feeRate));
+  const outputValue = BigInt(escrowValue) - fee;
+
+  if (outputValue <= BigInt(0)) {
+    throw new Error("Escrow value too small for payout fee");
+  }
+
+  // Single output to winner
   psbt.addOutput({
     address: winnerAddress,
-    value: BigInt(0), // Will be updated
+    value: outputValue,
   });
 
   return psbt.toBase64();
@@ -65,54 +136,13 @@ export function combinePsbts(psbtBase64Array: string[]): string {
     bitcoin.Psbt.fromBase64(base64, { network })
   );
 
-  // Start with the first PSBT
   const combined = psbts[0];
 
-  // Combine signatures from other PSBTs
   for (let i = 1; i < psbts.length; i++) {
     combined.combine(psbts[i]);
   }
 
   return combined.toBase64();
-}
-
-// Update the output value based on total inputs minus fee
-export function updateOutputValue(
-  psbtBase64: string,
-  totalInputSats: number,
-  feeSats: number
-): string {
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network });
-
-  const outputValue = BigInt(totalInputSats - feeSats);
-
-  if (outputValue <= BigInt(0)) {
-    throw new Error("Output value must be positive after fees");
-  }
-
-  // Create a new PSBT with updated output
-  const newPsbt = new bitcoin.Psbt({ network });
-
-  // Copy inputs
-  psbt.data.inputs.forEach((input, index) => {
-    const txInput = psbt.txInputs[index];
-    newPsbt.addInput({
-      hash: txInput.hash,
-      index: txInput.index,
-      witnessUtxo: input.witnessUtxo,
-      partialSig: input.partialSig,
-      finalScriptWitness: input.finalScriptWitness,
-    });
-  });
-
-  // Add output with correct value
-  const originalOutput = psbt.txOutputs[0];
-  newPsbt.addOutput({
-    address: bitcoin.address.fromOutputScript(originalOutput.script, network),
-    value: outputValue,
-  });
-
-  return newPsbt.toBase64();
 }
 
 // Finalize all inputs and extract the raw transaction
@@ -123,7 +153,6 @@ export function finalizePsbt(psbtBase64: string): {
 } {
   const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network });
 
-  // Finalize all inputs
   psbt.finalizeAllInputs();
 
   const tx = psbt.extractTransaction();
@@ -148,7 +177,6 @@ export function calculateWinner(
     throw new Error("Player count must be positive");
   }
 
-  // Get the last byte of the TXID (first 2 chars since txid is reversed)
   const lastByte = parseInt(txid.slice(-2), 16);
   const winnerIndex = lastByte % playerCount;
 
@@ -171,20 +199,6 @@ export function estimateTxSize(inputCount: number): number {
 export function calculateFee(inputCount: number, feeRate: number): number {
   const vsize = estimateTxSize(inputCount);
   return Math.ceil(vsize * feeRate);
-}
-
-// Generate a BIP-21 URI for signing
-export function generateBip21Uri(
-  address: string,
-  psbtBase64: string,
-  label?: string
-): string {
-  const params = new URLSearchParams();
-  params.set("psbt", psbtBase64);
-  if (label) {
-    params.set("label", label);
-  }
-  return `bitcoin:${address}?${params.toString()}`;
 }
 
 // Validate a PSBT structure
@@ -251,7 +265,7 @@ export function getPsbtDetails(psbtBase64: string): {
   };
 }
 
-// Build unified PSBT from all players
+// Build unified PSBT from all players (legacy — use buildEscrowPsbt)
 export function buildUnifiedPsbt(
   players: Player[],
   winnerAddress: string,
@@ -261,7 +275,6 @@ export function buildUnifiedPsbt(
 
   let totalInput = BigInt(0);
 
-  // Add all player inputs
   players.forEach((player) => {
     if (player.utxo) {
       psbt.addInput({
@@ -276,7 +289,6 @@ export function buildUnifiedPsbt(
     }
   });
 
-  // Calculate fee
   const fee = BigInt(calculateFee(players.length, feeRate));
   const outputValue = totalInput - fee;
 
@@ -284,7 +296,6 @@ export function buildUnifiedPsbt(
     throw new Error("Insufficient funds for fee");
   }
 
-  // Single output to winner
   psbt.addOutput({
     address: winnerAddress,
     value: outputValue,
