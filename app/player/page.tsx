@@ -6,23 +6,24 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { QRCodeSVG } from "qrcode.react";
+import { WalletSelector } from "@/components/wallet/wallet-selector";
+import { EducationalSlides } from "@/components/game/educational-slides";
 import { WaitingRoom } from "@/components/player/waiting-room";
 import { ResultWinner } from "@/components/player/result-winner";
 import { ResultLoser } from "@/components/player/result-loser";
 import { usePlayerGame, useHaptic } from "@/hooks/use-game";
-import {
-  formatSats,
-  hasWalletExtension,
-  detectWalletType,
-  getWalletDisplayName,
-  signPsbtWithExtension,
-  generateBip21PaymentUri,
-} from "@/lib/bitcoin/wallet-connect";
+import { formatSats } from "@/lib/bitcoin/wallet-connect";
 import { generateAnonymousName } from "@/lib/game/state";
 import { DEFAULT_CONFIG } from "@/lib/game/types";
 
-type PlayerStep = "landing" | "identity" | "bet" | "wallet" | "waiting" | "result";
+type PlayerStep =
+  | "landing"
+  | "learn"
+  | "identity"
+  | "bet"
+  | "wallet"
+  | "waiting"
+  | "result";
 
 function PlayerContent() {
   const searchParams = useSearchParams();
@@ -32,20 +33,13 @@ function PlayerContent() {
   const { phase, isJoined, result, error, joinGame, submitSignature, keypair } =
     usePlayerGame(gameId, presenterPubkey);
 
-  const { shortPulse, doublePulse, longPulse, victoryPulse, defeatPulse } = useHaptic();
+  const { shortPulse, doublePulse, longPulse, victoryPulse, defeatPulse } =
+    useHaptic();
 
   const [step, setStep] = useState<PlayerStep>("landing");
   const [displayName, setDisplayName] = useState("");
   const [betAmount, setBetAmount] = useState(DEFAULT_CONFIG.defaultBet);
-  const [hasExtension, setHasExtension] = useState(false);
-  const [walletType, setWalletType] = useState<string>("none");
-  const [signMethod, setSignMethod] = useState<"qr" | "extension" | null>(null);
-
-  // Check for wallet extension on mount
-  useEffect(() => {
-    setHasExtension(hasWalletExtension());
-    setWalletType(getWalletDisplayName(detectWalletType()));
-  }, []);
+  const [wantsToLearn, setWantsToLearn] = useState<boolean | null>(null);
 
   // Generate default name
   useEffect(() => {
@@ -69,7 +63,17 @@ function PlayerContent() {
   }, [phase, result, longPulse, doublePulse, victoryPulse, defeatPulse]);
 
   // Handle step transitions
-  const handleEnter = () => {
+  const handleEnter = (learn: boolean) => {
+    shortPulse();
+    setWantsToLearn(learn);
+    if (learn) {
+      setStep("learn");
+    } else {
+      setStep("identity");
+    }
+  };
+
+  const handleLearnComplete = () => {
     shortPulse();
     setStep("identity");
   };
@@ -84,24 +88,24 @@ function PlayerContent() {
     setStep("wallet");
   };
 
-  const handleWalletSign = async () => {
+  const handleWalletSign = async (receivingAddress: string) => {
     try {
       longPulse();
-
-      // Join the game
-      await joinGame(betAmount, displayName);
-
-      // If using extension, attempt to sign
-      if (signMethod === "extension" && hasExtension) {
-        // In real implementation, we would get the PSBT from the game
-        // For now, we simulate the signing
-        // const signedPsbt = await signPsbtWithExtension(basePsbt);
-        // await submitSignature(signedPsbt);
-      }
-
+      await joinGame(betAmount, receivingAddress, displayName);
       setStep("waiting");
     } catch (err) {
       console.error("Failed to join:", err);
+    }
+  };
+
+  const handleSignComplete = async (signedPsbt: string, receivingAddress: string) => {
+    try {
+      // First join with receiving address, then submit signature
+      await joinGame(betAmount, receivingAddress, displayName);
+      await submitSignature(signedPsbt);
+      setStep("waiting");
+    } catch (err) {
+      console.error("Failed to submit signature:", err);
     }
   };
 
@@ -109,11 +113,22 @@ function PlayerContent() {
   if (!gameId) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="text-center">
-          <div className="font-mono text-glitch text-xl mb-4">ERROR</div>
-          <p className="font-mono text-muted-foreground">
-            No game ID provided. Please scan a valid QR code.
+        <div className="text-center max-w-sm">
+          <div className="font-mono text-glitch text-xl mb-4">
+            NO GAME FOUND
+          </div>
+          <p className="font-mono text-sm text-muted-foreground mb-6">
+            Please scan a valid QR code from the presenter screen to join a
+            game.
           </p>
+          <div className="p-4 bg-muted/20 rounded-lg">
+            <div className="font-mono text-xs text-muted-foreground">
+              Looking for a game?
+            </div>
+            <div className="font-mono text-sm text-neon mt-2">
+              Ask the presenter to show the join QR code
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -134,7 +149,7 @@ function PlayerContent() {
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.2 }}
-            className="text-center"
+            className="text-center w-full max-w-sm"
           >
             <h1 className="font-mono text-3xl text-neon mb-2">
               ENTROPY ROULETTE
@@ -143,7 +158,7 @@ function PlayerContent() {
               PSBT Collaborative Transaction Game
             </p>
 
-            <div className="mb-8">
+            <div className="mb-8 p-4 bg-card border border-border rounded-lg">
               <div className="font-mono text-xs text-muted-foreground mb-2">
                 GAME ID
               </div>
@@ -153,19 +168,28 @@ function PlayerContent() {
             </div>
 
             <motion.div
-              className="font-mono text-xs text-muted-foreground mb-4"
+              className="font-mono text-xs text-muted-foreground mb-8"
               animate={{ opacity: [0.5, 1, 0.5] }}
               transition={{ duration: 2, repeat: Infinity }}
             >
               Your sats. Your risk. Bitcoin&apos;s entropy.
             </motion.div>
 
-            <Button
-              onClick={handleEnter}
-              className="bg-neon text-background hover:bg-neon/80 font-mono px-8 py-6 text-lg"
-            >
-              ENTER THE ROULETTE
-            </Button>
+            <div className="space-y-3">
+              <Button
+                onClick={() => handleEnter(false)}
+                className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-6 text-lg"
+              >
+                JOIN GAME
+              </Button>
+              <Button
+                onClick={() => handleEnter(true)}
+                variant="outline"
+                className="w-full font-mono py-6"
+              >
+                LEARN HOW IT WORKS FIRST
+              </Button>
+            </div>
           </motion.div>
 
           {/* Terminal typing effect */}
@@ -188,6 +212,19 @@ function PlayerContent() {
         </motion.div>
       )}
 
+      {/* Learn */}
+      {step === "learn" && (
+        <motion.div
+          key="learn"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          className="min-h-screen bg-background flex flex-col items-center justify-center p-6"
+        >
+          <EducationalSlides variant="player" onComplete={handleLearnComplete} />
+        </motion.div>
+      )}
+
       {/* Identity */}
       {step === "identity" && (
         <motion.div
@@ -198,12 +235,17 @@ function PlayerContent() {
           className="min-h-screen bg-background flex flex-col items-center justify-center p-6"
         >
           <div className="w-full max-w-sm">
-            <h2 className="font-mono text-xl text-neon mb-2 text-center">
-              IDENTITY
-            </h2>
-            <p className="font-mono text-xs text-muted-foreground text-center mb-8">
-              How should you be known?
-            </p>
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm">
+                  1
+                </div>
+                <h2 className="font-mono text-xl text-neon">IDENTITY</h2>
+              </div>
+              <p className="font-mono text-xs text-muted-foreground ml-10">
+                How should you be known in this game?
+              </p>
+            </div>
 
             <div className="space-y-6">
               <div>
@@ -216,6 +258,9 @@ function PlayerContent() {
                   placeholder="Anonymous"
                   className="font-mono text-center text-lg"
                 />
+                <p className="font-mono text-xs text-muted-foreground mt-2 text-center">
+                  This is how other players will see you
+                </p>
               </div>
 
               <Button
@@ -229,9 +274,9 @@ function PlayerContent() {
               <Button
                 onClick={handleIdentityConfirm}
                 disabled={!displayName.trim()}
-                className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
+                className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-6"
               >
-                CONFIRM IDENTITY
+                CONTINUE
               </Button>
             </div>
           </div>
@@ -248,16 +293,21 @@ function PlayerContent() {
           className="min-h-screen bg-background flex flex-col items-center justify-center p-6"
         >
           <div className="w-full max-w-sm">
-            <h2 className="font-mono text-xl text-neon mb-2 text-center">
-              YOUR BET
-            </h2>
-            <p className="font-mono text-xs text-muted-foreground text-center mb-8">
-              How much entropy are you contributing?
-            </p>
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm">
+                  2
+                </div>
+                <h2 className="font-mono text-xl text-neon">YOUR BET</h2>
+              </div>
+              <p className="font-mono text-xs text-muted-foreground ml-10">
+                How much are you willing to risk?
+              </p>
+            </div>
 
             <div className="space-y-8">
               {/* Amount display */}
-              <div className="text-center">
+              <div className="text-center p-6 bg-card border border-border rounded-lg">
                 <motion.div
                   key={betAmount}
                   initial={{ scale: 1.2 }}
@@ -298,16 +348,27 @@ function PlayerContent() {
                     key={amount}
                     variant={betAmount === amount ? "default" : "outline"}
                     onClick={() => setBetAmount(amount)}
-                    className="font-mono text-xs"
+                    className={`font-mono text-xs ${
+                      betAmount === amount
+                        ? "bg-neon text-background"
+                        : ""
+                    }`}
                   >
                     {formatSats(amount)}
                   </Button>
                 ))}
               </div>
 
+              {/* Warning */}
+              <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
+                <p className="font-mono text-xs text-glitch">
+                  Only bet what you can afford to lose. Winner takes all.
+                </p>
+              </div>
+
               <Button
                 onClick={handleBetConfirm}
-                className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
+                className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-6"
               >
                 LOCK IN BET
               </Button>
@@ -323,108 +384,57 @@ function PlayerContent() {
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
-          className="min-h-screen bg-background flex flex-col items-center justify-center p-6"
+          className="min-h-screen bg-background flex flex-col py-8 px-6 overflow-auto"
         >
-          <div className="w-full max-w-sm">
-            <h2 className="font-mono text-xl text-neon mb-2 text-center">
-              SIGN YOUR INPUT
-            </h2>
-            <p className="font-mono text-xs text-muted-foreground text-center mb-8">
-              Choose how to sign your PSBT input
-            </p>
-
-            <div className="space-y-4">
-              {/* Extension option */}
-              {hasExtension && (
-                <motion.button
-                  onClick={() => setSignMethod("extension")}
-                  className={`w-full p-4 rounded-lg border-2 transition-all ${
-                    signMethod === "extension"
-                      ? "border-neon bg-neon/10"
-                      : "border-border hover:border-neon/50"
-                  }`}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <div className="font-mono text-sm text-neon mb-1">
-                    BROWSER EXTENSION
-                  </div>
-                  <div className="font-mono text-xs text-muted-foreground">
-                    Sign with {walletType}
-                  </div>
-                </motion.button>
-              )}
-
-              {/* QR option */}
-              <motion.button
-                onClick={() => setSignMethod("qr")}
-                className={`w-full p-4 rounded-lg border-2 transition-all ${
-                  signMethod === "qr"
-                    ? "border-neon bg-neon/10"
-                    : "border-border hover:border-neon/50"
-                }`}
-                whileTap={{ scale: 0.98 }}
-              >
-                <div className="font-mono text-sm text-neon mb-1">
-                  MOBILE WALLET
+          <div className="w-full max-w-sm mx-auto">
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm">
+                  3
                 </div>
-                <div className="font-mono text-xs text-muted-foreground">
-                  Scan QR with BlueWallet, Sparrow, etc.
-                </div>
-              </motion.button>
-
-              {/* QR Code display */}
-              {signMethod === "qr" && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  className="overflow-hidden"
-                >
-                  <div className="p-4 bg-white rounded-lg mx-auto w-fit">
-                    <QRCodeSVG
-                      value={generateBip21PaymentUri(
-                        "bc1qentropy", // Placeholder
-                        betAmount,
-                        "Entropy Roulette"
-                      )}
-                      size={200}
-                      level="M"
-                    />
-                  </div>
-                  <p className="font-mono text-xs text-center text-muted-foreground mt-4">
-                    Scan to sign your input
-                  </p>
-                </motion.div>
-              )}
-
-              <Button
-                onClick={handleWalletSign}
-                disabled={!signMethod}
-                className="w-full bg-neon text-background hover:bg-neon/80 font-mono mt-4"
-              >
-                {signMethod === "extension"
-                  ? "SIGN WITH EXTENSION"
-                  : signMethod === "qr"
-                    ? "I HAVE SIGNED"
-                    : "SELECT SIGNING METHOD"}
-              </Button>
+                <h2 className="font-mono text-xl text-neon">SIGN WITH WALLET</h2>
+              </div>
+              <p className="font-mono text-xs text-muted-foreground ml-10">
+                Choose your Bitcoin wallet to sign the transaction
+              </p>
             </div>
 
             {/* Bet summary */}
-            <div className="mt-8 p-4 bg-muted/20 rounded-lg">
+            <div className="mb-6 p-4 bg-muted/20 rounded-lg">
               <div className="flex justify-between mb-2">
                 <span className="font-mono text-xs text-muted-foreground">
-                  Identity
+                  Playing as
                 </span>
                 <span className="font-mono text-xs text-neon">{displayName}</span>
               </div>
               <div className="flex justify-between">
                 <span className="font-mono text-xs text-muted-foreground">
-                  Bet
+                  Betting
                 </span>
                 <span className="font-mono text-xs text-memphis">
                   {formatSats(betAmount)}
                 </span>
               </div>
+            </div>
+
+            {/* Wallet Selector */}
+            <WalletSelector
+              psbtBase64="" // This would come from the game state
+              betAmount={betAmount}
+              onSignComplete={handleSignComplete}
+              onManualSign={handleWalletSign}
+            />
+
+            {/* Educational note */}
+            <div className="mt-6 p-4 bg-card border border-border rounded-lg">
+              <h4 className="font-mono text-xs text-neon mb-2">
+                What happens when you sign?
+              </h4>
+              <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                Your wallet will create a signature for your input. This proves
+                you authorize spending your sats. The signature is combined with
+                other players&apos; signatures to create the final transaction.
+              </p>
             </div>
           </div>
         </motion.div>
@@ -440,9 +450,9 @@ function PlayerContent() {
         >
           <WaitingRoom
             phase={phase}
-            playerCount={5} // Would come from game state
-            totalPot={125000} // Would come from game state
-            playerPosition={3} // Would come from game state
+            playerCount={5}
+            totalPot={125000}
+            playerPosition={3}
             displayName={displayName}
           />
         </motion.div>

@@ -15,6 +15,7 @@ export interface Player {
   pubkey: string; // Nostr npub or generated
   displayName: string;
   amount: number; // sats
+  receivingAddress: string; // Player's wallet address to receive winnings
   utxo?: UTXO;
   signedPsbt?: string; // base64
   joinedAt: number;
@@ -33,7 +34,6 @@ export interface GameSession {
   phase: GamePhase;
   presenterPubkey: string;
   players: Player[];
-  potAddress: string; // Winner receives funds here
   basePsbt?: string; // Initial PSBT from presenter
   combinedPsbt?: string; // After all signatures
   finalizedPsbt?: string; // Ready for broadcast

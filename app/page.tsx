@@ -5,6 +5,13 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { AutoGlitchText } from "@/components/ui/glitch-text";
+import {
+  XverseLogo,
+  BlueWalletLogo,
+  SparrowLogo,
+  AlbyLogo,
+  LeatherLogo,
+} from "@/components/wallet/wallet-logos";
 
 export default function HomePage() {
   const [mounted, setMounted] = useState(false);
@@ -128,12 +135,122 @@ export default function HomePage() {
           </motion.div>
         </motion.div>
 
-        {/* Features */}
+        {/* How it works */}
         <motion.div
-          className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl"
+          className="mt-16 max-w-4xl w-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 1.2 }}
+          transition={{ delay: 1.1 }}
+        >
+          <h3 className="font-mono text-center text-neon text-sm mb-8 uppercase tracking-wider">
+            How It Works
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {[
+              {
+                step: 1,
+                title: "Scan QR",
+                desc: "Join the game from the presenter screen",
+              },
+              {
+                step: 2,
+                title: "Choose Bet",
+                desc: "Select how many sats to wager",
+              },
+              {
+                step: 3,
+                title: "Sign PSBT",
+                desc: "Sign with your Bitcoin wallet",
+              },
+              {
+                step: 4,
+                title: "Win or Lose",
+                desc: "Entropy decides the winner",
+              },
+            ].map((item, i) => (
+              <motion.div
+                key={item.step}
+                className="relative p-4 border border-border/50 rounded-lg bg-card/50"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 1.2 + i * 0.1 }}
+              >
+                <div className="absolute -top-3 left-4 bg-background px-2">
+                  <span className="font-mono text-neon text-xs">
+                    0{item.step}
+                  </span>
+                </div>
+                <div className="font-mono text-sm text-foreground mb-1 mt-1">
+                  {item.title}
+                </div>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {item.desc}
+                </p>
+              </motion.div>
+            ))}
+          </div>
+        </motion.div>
+
+        {/* Supported Wallets */}
+        <motion.div
+          className="mt-12 max-w-4xl w-full"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.5 }}
+        >
+          <h3 className="font-mono text-center text-muted-foreground text-xs mb-6 uppercase tracking-wider">
+            Supported Wallets
+          </h3>
+          <div className="flex flex-wrap justify-center gap-6 items-center">
+            <div className="flex flex-col items-center gap-2">
+              <XverseLogo className="w-10 h-10" />
+              <span className="font-mono text-xs text-muted-foreground">
+                Xverse
+              </span>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <BlueWalletLogo className="w-10 h-10" />
+              <span className="font-mono text-xs text-muted-foreground">
+                BlueWallet
+              </span>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <SparrowLogo className="w-10 h-10" />
+              <span className="font-mono text-xs text-muted-foreground">
+                Sparrow
+              </span>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <AlbyLogo className="w-10 h-10" />
+              <span className="font-mono text-xs text-muted-foreground">
+                Alby
+              </span>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <LeatherLogo className="w-10 h-10" />
+              <span className="font-mono text-xs text-muted-foreground">
+                Leather
+              </span>
+            </div>
+            <div className="flex flex-col items-center gap-2 opacity-60">
+              <div className="w-10 h-10 rounded-lg border border-dashed border-muted-foreground flex items-center justify-center">
+                <span className="font-mono text-xs text-muted-foreground">
+                  +
+                </span>
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">
+                Any PSBT
+              </span>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Features */}
+        <motion.div
+          className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.7 }}
         >
           <div className="p-6 border border-border/50 rounded-lg bg-card/50">
             <div className="font-mono text-neon text-sm mb-2">01. PSBT</div>
@@ -154,6 +271,26 @@ export default function HomePage() {
             <p className="font-mono text-xs text-muted-foreground">
               Winner determined by TXID % player_count. Verifiable randomness
               from Bitcoin&apos;s proof of work. No manipulation possible.
+            </p>
+          </div>
+        </motion.div>
+
+        {/* Educational note */}
+        <motion.div
+          className="mt-12 max-w-2xl text-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.9 }}
+        >
+          <div className="p-6 border border-neon/30 bg-neon/5 rounded-lg">
+            <h4 className="font-mono text-neon text-sm mb-2">
+              Perfect for Bitcoin Education
+            </h4>
+            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+              Entropy Roulette is designed for conferences, meetups, and
+              workshops. The presenter view includes educational slides
+              explaining PSBTs, transaction construction, and how Bitcoin&apos;s
+              entropy provides verifiable randomness. Players learn by doing.
             </p>
           </div>
         </motion.div>

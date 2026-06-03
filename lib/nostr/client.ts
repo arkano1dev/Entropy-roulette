@@ -68,9 +68,9 @@ export async function publishGameSession(
         id: p.id,
         displayName: p.displayName,
         amount: p.amount,
+        receivingAddress: p.receivingAddress,
         signed: !!p.signedPsbt,
       })),
-      potAddress: session.potAddress,
       feeRate: session.feeRate,
     }),
     pubkey,
@@ -88,7 +88,8 @@ export async function publishPlayerJoin(
   gameId: string,
   playerId: string,
   displayName: string,
-  amount: number
+  amount: number,
+  receivingAddress: string
 ): Promise<void> {
   const pool = getPool();
   const pubkey = getPublicKey(secretKey);
@@ -101,11 +102,13 @@ export async function publishPlayerJoin(
       ["p", pubkey],
       ["playerId", playerId],
       ["amount", amount.toString()],
+      ["address", receivingAddress],
     ],
     content: JSON.stringify({
       playerId,
       displayName,
       amount,
+      receivingAddress,
     }),
     pubkey,
   };

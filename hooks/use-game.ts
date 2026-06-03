@@ -40,7 +40,7 @@ export function usePresenterGame() {
   const unsubscribesRef = useRef<Array<() => void>>([]);
 
   // Initialize a new game
-  const initializeGame = useCallback(async (potAddress: string) => {
+  const initializeGame = useCallback(async () => {
     setIsInitializing(true);
     setError(null);
 
@@ -49,7 +49,6 @@ export function usePresenterGame() {
       setKeypair(newKeypair);
 
       const newSession = createGameSession(newKeypair.pubkey);
-      newSession.potAddress = potAddress;
 
       setSession(newSession);
 
@@ -223,7 +222,7 @@ export function usePresenterGame() {
 
   // Handle player join event
   const handlePlayerJoin = useCallback(
-    (playerId: string, pubkey: string, displayName: string, amount: number) => {
+    (playerId: string, pubkey: string, displayName: string, amount: number, receivingAddress: string) => {
       setSession((current) => {
         if (!current || current.phase !== "LOBBY_OPEN") return current;
 
@@ -232,6 +231,7 @@ export function usePresenterGame() {
           pubkey,
           displayName,
           amount,
+          receivingAddress,
           joinedAt: Date.now(),
         };
 
@@ -267,7 +267,8 @@ export function usePresenterGame() {
           content.playerId,
           event.pubkey,
           content.displayName,
-          content.amount
+          content.amount,
+          content.receivingAddress
         );
       } catch {
         // Ignore parse errors
@@ -333,7 +334,7 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
 
   // Join the game
   const joinGame = useCallback(
-    async (amount: number, displayName?: string) => {
+    async (amount: number, receivingAddress: string, displayName?: string) => {
       if (!keypair) return;
 
       try {
@@ -347,7 +348,8 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
           gameId,
           id,
           name,
-          amount
+          amount,
+          receivingAddress
         );
 
         setIsJoined(true);
