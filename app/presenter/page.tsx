@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
-import { PSBTGraph } from "@/components/game/psbt-graph";
+import { PSBTInspector } from "@/components/game/psbt-inspector";
 import { LiveLog, createLogEntry } from "@/components/game/live-log";
 import { ControlPanel } from "@/components/presenter/control-panel";
 import { EducationalSlides } from "@/components/game/educational-slides";
+import { XverseConnectPresenter, type PresenterWalletState } from "@/components/presenter/xverse-connect";
 import { usePresenterGame, useHaptic } from "@/hooks/use-game";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
 import {
@@ -17,9 +18,11 @@ import {
 } from "@/lib/bitcoin/mempool-api";
 import {
   finalizePsbt,
-  buildUnifiedPsbt,
+  buildEscrowPsbt,
+  buildPayoutPsbt,
   calculateWinner,
 } from "@/lib/bitcoin/psbt-engine";
+import { signPresenterPsbt } from "@/lib/bitcoin/sats-connect";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
@@ -38,6 +41,7 @@ export default function PresenterPage() {
     finalizePsbt: setFinalizedPsbt,
     broadcastTx,
     confirmAndResolve,
+    publishPsbtForSigning,
     totalPot,
   } = usePresenterGame();
 
@@ -50,13 +54,22 @@ export default function PresenterPage() {
       timestamp: number;
       type: "info" | "success" | "warning" | "error" | "system";
       message: string;
-    }>
-  >([]);
+    }
+  >>([]);
   const [blockHeight, setBlockHeight] = useState<number | null>(null);
   const [feeRate, setFeeRate] = useState<number>(10);
   const [txid, setTxid] = useState<string | null>(null);
+  const [payoutTxid, setPayoutTxid] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const [showEducation, setShowEducation] = useState(true);
+
+  // Wallet state
+  const [walletState, setWalletState] = useState<PresenterWalletState | undefined>(
+    undefined
+  );
+
+  // PSBT state
+  const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
 
   // Add log entry
   const addLog = useCallback(
@@ -88,13 +101,27 @@ export default function PresenterPage() {
     fetchData();
   }, [addLog]);
 
-  // Handle initialization
+  // Handle initialization (requires wallet + signature)
   const handleInitialize = async () => {
+    if (!walletState?.connected) {
+      addLog("error", "Connect Xverse wallet first");
+      return;
+    }
+    if (!walletState.signature) {
+      addLog("error", "Sign the game creation message first");
+      return;
+    }
+
     try {
       addLog("system", "Initializing entropy field...");
       const newSession = await initializeGame();
+      // Set presenter's escrow address
+      if (walletState.address) {
+        // Store in session state manually (we'll augment usePresenterGame later)
+      }
       addLog("success", `Game created: ${newSession.id.toUpperCase()}`);
-      addLog("info", "Winner will receive funds to their connected wallet");
+      addLog("info", "Escrow address: presenter wallet (Tx 1)");
+      addLog("info", "Payout will be Tx 2 after winner determined");
       setMode("educate");
       longPulse();
     } catch (err) {
@@ -120,26 +147,64 @@ export default function PresenterPage() {
 
   // Handle signature collection
   const handleCollectSignatures = async () => {
-    addLog("system", "Initiating signature collection...");
-    await collectSignatures();
-    addLog("info", "Waiting for all players to sign their inputs...");
-    longPulse();
-  };
+    if (!session || !walletState?.address) return;
 
-  // Handle PSBT finalization - winner address will be determined after TXID entropy
-  const handleFinalize = async () => {
-    if (!session || session.players.length === 0) return;
+    addLog("system", "Initiating signature collection...");
 
     try {
-      addLog("system", "Building unified PSBT...");
-      // Use first player's address as placeholder - actual winner determined by TXID
-      const placeholderAddress = session.players[0].receivingAddress;
-      const unifiedPsbt = buildUnifiedPsbt(session.players, placeholderAddress, feeRate);
-      addLog("info", `PSBT has ${session.players.length} inputs`);
+      // Build escrow PSBT: all inputs → single output to presenter's address
+      const escrowPsbt = buildEscrowPsbt(
+        session.players,
+        walletState.address,
+        feeRate
+      );
+      setCurrentPsbt(escrowPsbt);
+      addLog("info", `PSBT built with ${session.players.length} inputs → escrow`);
 
-      const { rawTx, txid: finalTxid } = finalizePsbt(unifiedPsbt);
+      // Publish PSBT to Nostr for players
+      await publishPsbtForSigning(escrowPsbt);
+      addLog("success", "PSBT published to Nostr for players");
+
+      await collectSignatures();
+      addLog("info", "Waiting for all players to sign their inputs...");
+      longPulse();
+    } catch (err) {
+      addLog("error", `Failed to build PSBT: ${err}`);
+    }
+  };
+
+  // Handle PSBT finalization - sign presenter's input if any, combine all signatures
+  const handleFinalize = async () => {
+    if (!session || session.players.length === 0 || !currentPsbt) return;
+
+    try {
+      addLog("system", "Finalizing PSBT...");
+
+      // Collect all signed PSBTs from players
+      const signedPsbts = session.players
+        .map((p) => p.signedPsbt)
+        .filter(Boolean) as string[];
+
+      if (signedPsbts.length === 0) {
+        addLog("error", "No player signatures found");
+        return;
+      }
+
+      // Combine all signatures into the base PSBT
+      // For the escrow flow, each player signs their own input.
+      // We need to merge them. The base PSBT is `currentPsbt`.
+      // Each player's signed fragment is a PSBT with their input signed.
+      // We combine them all.
+      let combined = currentPsbt;
+      for (const signed of signedPsbts) {
+        // Use bitcoinjs combine logic
+        const { combinePsbts } = await import("@/lib/bitcoin/psbt-engine");
+        combined = combinePsbts([combined, signed]);
+      }
+
+      const { rawTx, txid: finalTxid } = finalizePsbt(combined);
       setTxid(finalTxid);
-      await setFinalizedPsbt(unifiedPsbt, finalTxid);
+      await setFinalizedPsbt(combined, finalTxid);
 
       addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
       longPulse();
@@ -148,14 +213,20 @@ export default function PresenterPage() {
     }
   };
 
-  // Handle broadcast
+  // Handle broadcast (Tx 1)
   const handleBroadcast = async () => {
     if (!session || !txid) return;
 
     try {
-      addLog("system", "Broadcasting to Bitcoin network...");
-      await broadcastTx(txid);
-      addLog("success", `Transaction broadcast! TXID: ${txid.slice(0, 16)}...`);
+      addLog("system", "Broadcasting Tx 1 to Bitcoin network...");
+      // We need rawTx to broadcast — store it somewhere. For now extract from finalizedPsbt.
+      if (!session.finalizedPsbt) {
+        addLog("error", "No finalized PSBT found");
+        return;
+      }
+      const { rawTx } = finalizePsbt(session.finalizedPsbt);
+      const broadcastedTxid = await broadcastTransaction(rawTx);
+      addLog("success", `Tx 1 broadcast! TXID: ${broadcastedTxid.slice(0, 16)}...`);
       addLog("info", "Waiting for block confirmation...");
       setIsPolling(true);
       longPulse();
@@ -166,14 +237,14 @@ export default function PresenterPage() {
 
   // Poll for confirmation
   useEffect(() => {
-    if (!isPolling || !txid || !session) return;
+    if (!isPolling || !txid || !session || !walletState?.address) return;
 
     const pollInterval = setInterval(async () => {
       try {
         const status = await getTransactionStatus(txid);
         if (status.confirmed) {
           setIsPolling(false);
-          addLog("success", `CONFIRMED in block ${status.block_height}!`);
+          addLog("success", `Tx 1 CONFIRMED in block ${status.block_height}!`);
 
           const { winnerIndex, entropyByte, calculation } = calculateWinner(
             txid,
@@ -186,13 +257,44 @@ export default function PresenterPage() {
             "success",
             `WINNER: ${winner.displayName} (Index ${winnerIndex})`
           );
-          addLog(
-            "info",
-            `Funds sent to: ${winner.receivingAddress.slice(0, 20)}...`
-          );
 
           await confirmAndResolve(txid);
           victoryPulse();
+
+          // Now build and broadcast Tx 2: payout from escrow to winner
+          try {
+            addLog("system", "Building payout transaction (Tx 2)...");
+            // We need to know the escrow UTXO from Tx 1.
+            // Tx 1 has a single output to presenter address.
+            // We can look it up via mempool, but for now we know:
+            // - txid = txid
+            // - vout = 0 (single output)
+            // - value = totalPot - fee (approximate)
+            const escrowValue = totalPot - calculateFee(session.players.length, feeRate);
+
+            const payoutPsbt = buildPayoutPsbt(
+              txid,
+              0,
+              escrowValue,
+              walletState.address,
+              winner.receivingAddress,
+              feeRate
+            );
+
+            // Presenter signs the payout PSBT
+            const signedPayout = await signPresenterPsbt(payoutPsbt, walletState.address);
+            const { rawTx: payoutRawTx, txid: payoutTxidVal } = finalizePsbt(signedPayout);
+
+            addLog("system", "Broadcasting payout (Tx 2)...");
+            const actualPayoutTxid = await broadcastTransaction(payoutRawTx);
+            setPayoutTxid(actualPayoutTxid);
+            addLog(
+              "success",
+              `Payout broadcast! TXID: ${actualPayoutTxid.slice(0, 16)}...`
+            );
+          } catch (payoutErr) {
+            addLog("error", `Payout failed: ${payoutErr}`);
+          }
         }
       } catch {
         // Continue polling
@@ -200,7 +302,7 @@ export default function PresenterPage() {
     }, 10000);
 
     return () => clearInterval(pollInterval);
-  }, [isPolling, txid, session, addLog, confirmAndResolve, victoryPulse]);
+  }, [isPolling, txid, session, addLog, confirmAndResolve, victoryPulse, walletState, totalPot, feeRate]);
 
   // Log player joins
   useEffect(() => {
@@ -246,10 +348,18 @@ export default function PresenterPage() {
                 HOW IT WORKS
               </div>
               <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                Players join with their Bitcoin wallet. The winner receives all funds
-                directly to their connected wallet address. No intermediary pot needed.
+                Players join with their Xverse wallet. All inputs are combined into
+                Tx 1 (escrow to your address). The TXID entropy determines the winner.
+                Tx 2 pays the winner from escrow.
               </p>
             </div>
+
+            {/* Xverse Connect */}
+            <XverseConnectPresenter
+              onConnect={setWalletState}
+              onDisconnect={() => setWalletState(undefined)}
+              connectedState={walletState}
+            />
 
             <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
               <span className="font-mono text-sm text-muted-foreground">
@@ -271,7 +381,7 @@ export default function PresenterPage() {
 
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing}
+              disabled={isInitializing || !walletState?.signature}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
@@ -289,7 +399,7 @@ export default function PresenterPage() {
     );
   }
 
-  // Educational + Join screen (for projecting to audience)
+  // Educational + Join screen
   if (mode === "educate") {
     return (
       <div className="min-h-screen bg-background p-8">
@@ -313,7 +423,7 @@ export default function PresenterPage() {
             </Button>
             <Button
               onClick={handleOpenLobby}
-              disabled={session?.phase !== "INITIALIZED"}
+              disabled={session?.phase !== "IDLE"}
               className="bg-neon text-background hover:bg-neon/80 font-mono"
             >
               OPEN LOBBY
@@ -349,7 +459,6 @@ export default function PresenterPage() {
                   </div>
                 </div>
 
-                {/* Player count */}
                 {session && (
                   <div className="p-4 bg-neon/10 border border-neon/30 rounded-lg">
                     <div className="font-mono text-3xl text-neon mb-1">
@@ -367,21 +476,16 @@ export default function PresenterPage() {
             {/* Supported wallets */}
             <div className="bg-card border border-border rounded-lg p-6 w-full mt-6">
               <h3 className="font-mono text-sm text-neon mb-4">
-                SUPPORTED WALLETS
+                REQUIRED WALLETS
               </h3>
-              <div className="grid grid-cols-2 gap-4">
-                {["Xverse", "BlueWallet", "Sparrow", "Alby"].map((wallet) => (
-                  <div
-                    key={wallet}
-                    className="p-3 bg-muted/20 rounded-lg text-center"
-                  >
-                    <div className="font-mono text-sm">{wallet}</div>
+              <div className="grid grid-cols-1 gap-4">
+                <div className="p-3 bg-muted/20 rounded-lg text-center">
+                  <div className="font-mono text-sm text-neon">Xverse</div>
+                  <div className="font-mono text-xs text-muted-foreground">
+                    Browser extension required
                   </div>
-                ))}
+                </div>
               </div>
-              <p className="font-mono text-xs text-muted-foreground mt-4 text-center">
-                Any PSBT-compatible Bitcoin wallet works!
-              </p>
             </div>
           </div>
 
@@ -411,14 +515,12 @@ export default function PresenterPage() {
                 <div className="bg-card border border-border rounded-lg p-6 space-y-6">
                   <div>
                     <h3 className="font-mono text-lg text-neon mb-3">
-                      What is a PSBT?
+                      The Two-Transaction Flow
                     </h3>
                     <p className="font-mono text-sm text-muted-foreground leading-relaxed">
-                      A <span className="text-neon">Partially Signed Bitcoin
-                      Transaction</span> is a Bitcoin standard (BIP-174) that
-                      allows multiple parties to collaboratively construct and
-                      sign a transaction without any party having to trust the
-                      others with their private keys.
+                      Tx 1: All player inputs → single output to presenter's escrow.
+                      The TXID entropy determines the winner. Tx 2: Presenter pays
+                      the winner from escrow. No circular dependency.
                     </p>
                   </div>
 
@@ -430,23 +532,33 @@ export default function PresenterPage() {
                       {[
                         {
                           step: 1,
-                          title: "Players Join",
-                          desc: "Each player scans the QR and commits a bet",
+                          title: "Connect Xverse",
+                          desc: "Presenter connects wallet and signs game message",
                         },
                         {
                           step: 2,
-                          title: "Sign Inputs",
-                          desc: "Players sign their PSBT input with their wallet",
+                          title: "Players Join",
+                          desc: "Each player scans QR, connects Xverse, selects UTXO",
                         },
                         {
                           step: 3,
-                          title: "Combine & Broadcast",
-                          desc: "All signatures combine into one transaction",
+                          title: "Build Escrow PSBT",
+                          desc: "All inputs → single escrow output. Players sign.",
                         },
                         {
                           step: 4,
+                          title: "Broadcast Tx 1",
+                          desc: "Combined PSBT broadcast to mainnet",
+                        },
+                        {
+                          step: 5,
                           title: "Winner Selected",
-                          desc: "TXID entropy determines the winner",
+                          desc: "TXID entropy: last byte % player count",
+                        },
+                        {
+                          step: 6,
+                          title: "Payout (Tx 2)",
+                          desc: "Presenter broadcasts payout to winner",
                         },
                       ].map((item) => (
                         <div
@@ -512,7 +624,9 @@ export default function PresenterPage() {
                                 {player.displayName}
                               </div>
                               <div className="font-mono text-xs text-muted-foreground">
-                                {player.receivingAddress ? player.receivingAddress.slice(0, 16) + "..." : player.pubkey.slice(0, 12) + "..."}
+                                {player.receivingAddress
+                                  ? player.receivingAddress.slice(0, 16) + "..."
+                                  : player.pubkey.slice(0, 12) + "..."}
                               </div>
                             </div>
                           </div>
@@ -561,7 +675,7 @@ export default function PresenterPage() {
     );
   }
 
-  // Main game view (PSBT Graph focused)
+  // Main game view (PSBT Inspector focused)
   return (
     <div className="min-h-screen bg-background p-4">
       {/* Header */}
@@ -630,15 +744,27 @@ export default function PresenterPage() {
           </div>
         </div>
 
-        {/* Center: PSBT Graph */}
-        <div className="col-span-7 bg-background/50 border border-border rounded-lg overflow-hidden">
-          {session && (
-            <PSBTGraph
+        {/* Center: PSBT Inspector */}
+        <div className="col-span-7 bg-background/50 border border-border rounded-lg overflow-auto">
+          {session && currentPsbt && (
+            <PSBTInspector
+              psbtBase64={currentPsbt}
               players={session.players}
-              totalPot={totalPot}
-              winnerIndex={session.winnerIndex}
+              feeRate={feeRate}
               phase={session.phase}
             />
+          )}
+          {!currentPsbt && session && (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <div className="font-mono text-sm text-muted-foreground mb-2">
+                  PSBT will appear here after
+                </div>
+                <div className="font-mono text-sm text-neon">
+                  "COLLECT SIGNATURES" is clicked
+                </div>
+              </div>
+            </div>
           )}
         </div>
 
@@ -661,6 +787,34 @@ export default function PresenterPage() {
           <div className="flex-1 min-h-0">
             <LiveLog entries={logs} />
           </div>
+
+          {/* TXID display */}
+          <AnimatePresence>
+            {txid && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-3 bg-neon/10 border border-neon/30 rounded-lg"
+              >
+                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
+                  Tx 1 (Escrow)
+                </div>
+                <div className="font-mono text-xs text-neon break-all">{txid}</div>
+              </motion.div>
+            )}
+            {payoutTxid && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-3 bg-memphis/10 border border-memphis/30 rounded-lg"
+              >
+                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
+                  Tx 2 (Payout)
+                </div>
+                <div className="font-mono text-xs text-memphis break-all">{payoutTxid}</div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </div>

@@ -33,12 +33,15 @@ export interface GameSession {
   id: string;
   phase: GamePhase;
   presenterPubkey: string;
+  escrowAddress?: string; // Presenter's escrow address (their Xverse address)
+  presenterAddress?: string; // Presenter's escrow address
   players: Player[];
   basePsbt?: string; // Initial PSBT from presenter
   combinedPsbt?: string; // After all signatures
-  finalizedPsbt?: string; // Ready for broadcast
+  finalizedPsbt?: string; // Ready for broadcast (Tx 1)
   rawTx?: string; // Final transaction hex
-  txid?: string; // After broadcast
+  txid?: string; // After broadcast (Tx 1)
+  payoutTxid?: string; // Tx 2 payout
   winnerId?: string;
   winnerIndex?: number;
   feeRate: number; // sat/vB
@@ -75,6 +78,8 @@ export const NOSTR_KINDS = {
   PSBT_FRAGMENT: 20002, // Ephemeral
   GAME_STATE: 20003, // Ephemeral
   GAME_RESULT: 20004, // Ephemeral
+  PSBT_PUBLISH: 20005, // NEW: presenter publishes full PSBT for signing
+  PAYOUT_TX: 20006, // NEW: payout transaction broadcast
 } as const;
 
 // Default game configuration

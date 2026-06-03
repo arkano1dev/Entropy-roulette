@@ -20,11 +20,13 @@ import {
   publishGameState,
   publishGameResult,
   publishPsbtFragment,
+  publishPsbtPublish,
   subscribeToGameSession,
   subscribeToPlayerJoins,
   subscribeToPsbtFragments,
   subscribeToGameState,
   subscribeToGameResult,
+  subscribeToPsbtPublish,
 } from "@/lib/nostr/client";
 import { calculateWinner } from "@/lib/bitcoin/psbt-engine";
 
@@ -126,7 +128,7 @@ export function usePresenterGame() {
     }
   }, [session, keypair]);
 
-  // Finalize PSBT
+  // Finalize PSBT (Tx 1)
   const finalizePsbt = useCallback(
     async (finalizedPsbt: string, txid: string) => {
       if (!session || !keypair) return;
@@ -151,7 +153,7 @@ export function usePresenterGame() {
     [session, keypair]
   );
 
-  // Broadcast transaction
+  // Broadcast transaction (Tx 1)
   const broadcastTx = useCallback(
     async (txid: string) => {
       if (!session || !keypair) return;
@@ -222,7 +224,7 @@ export function usePresenterGame() {
 
   // Handle player join event
   const handlePlayerJoin = useCallback(
-    (playerId: string, pubkey: string, displayName: string, amount: number, receivingAddress: string) => {
+    (playerId: string, pubkey: string, displayName: string, amount: number, receivingAddress: string, utxo?: any) => {
       setSession((current) => {
         if (!current || current.phase !== "LOBBY_OPEN") return current;
 
@@ -232,6 +234,7 @@ export function usePresenterGame() {
           displayName,
           amount,
           receivingAddress,
+          utxo,
           joinedAt: Date.now(),
         };
 
@@ -255,11 +258,23 @@ export function usePresenterGame() {
     []
   );
 
+  // Publish full PSBT for signing
+  const publishPsbtForSigning = useCallback(
+    async (psbtBase64: string) => {
+      if (!session || !keypair) return;
+      try {
+        await publishPsbtPublish(keypair.secretKey, session.id, psbtBase64);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to publish PSBT");
+      }
+    },
+    [session, keypair]
+  );
+
   // Subscribe to events when game is active
   useEffect(() => {
     if (!session || !keypair) return;
 
-    // Subscribe to player joins
     const unsubJoins = subscribeToPlayerJoins(session.id, (event) => {
       try {
         const content = JSON.parse(event.content);
@@ -268,14 +283,14 @@ export function usePresenterGame() {
           event.pubkey,
           content.displayName,
           content.amount,
-          content.receivingAddress
+          content.receivingAddress,
+          content.utxo
         );
       } catch {
         // Ignore parse errors
       }
     });
 
-    // Subscribe to PSBT fragments
     const unsubPsbt = subscribeToPsbtFragments(session.id, (event) => {
       const playerIdTag = event.tags.find((t) => t[0] === "playerId");
       if (playerIdTag) {
@@ -303,6 +318,7 @@ export function usePresenterGame() {
     finalizePsbt,
     broadcastTx,
     confirmAndResolve,
+    publishPsbtForSigning,
     totalPot: session ? calculateTotalPot(session) : 0,
   };
 }
@@ -317,6 +333,7 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
   } | null>(null);
   const [phase, setPhase] = useState<GamePhase>("IDLE");
   const [isJoined, setIsJoined] = useState(false);
+  const [publishedPsbt, setPublishedPsbt] = useState<string | null>(null);
   const [result, setResult] = useState<{
     isWinner: boolean;
     calculation: string;
@@ -334,7 +351,7 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
 
   // Join the game
   const joinGame = useCallback(
-    async (amount: number, receivingAddress: string, displayName?: string) => {
+    async (amount: number, receivingAddress: string, displayName?: string, utxo?: any) => {
       if (!keypair) return;
 
       try {
@@ -349,7 +366,8 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
           id,
           name,
           amount,
-          receivingAddress
+          receivingAddress,
+          utxo
         );
 
         setIsJoined(true);
@@ -381,7 +399,6 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
 
   // Subscribe to game events
   useEffect(() => {
-    // Subscribe to session updates
     const unsubSession = subscribeToGameSession(
       gameId,
       presenterPubkey,
@@ -395,7 +412,6 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
       }
     );
 
-    // Subscribe to state updates
     const unsubState = subscribeToGameState(gameId, (event) => {
       try {
         const content = JSON.parse(event.content);
@@ -405,7 +421,10 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
       }
     });
 
-    // Subscribe to result
+    const unsubPsbt = subscribeToPsbtPublish(gameId, (event) => {
+      setPublishedPsbt(event.content);
+    });
+
     const unsubResult = subscribeToGameResult(gameId, (event) => {
       try {
         const content = JSON.parse(event.content);
@@ -422,7 +441,7 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
       }
     });
 
-    unsubscribesRef.current = [unsubSession, unsubState, unsubResult];
+    unsubscribesRef.current = [unsubSession, unsubState, unsubPsbt, unsubResult];
 
     return () => {
       unsubscribesRef.current.forEach((unsub) => unsub());
@@ -437,6 +456,7 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
     phase,
     isJoined,
     result,
+    publishedPsbt,
     error,
     joinGame,
     submitSignature,
