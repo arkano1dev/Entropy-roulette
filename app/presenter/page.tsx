@@ -68,6 +68,9 @@ export default function PresenterPage() {
   const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
   const [rawTxCache, setRawTxCache] = useState<string | null>(null);
 
+  // OP_RETURN message (presenter only, max 80 bytes)
+  const [opReturnMessage, setOpReturnMessage] = useState("");
+
   // Add log entry
   const addLog = useCallback(
     (
@@ -164,6 +167,7 @@ export default function PresenterPage() {
           players: playersWithUtxo.map((p) => ({ utxo: p.utxo })),
           escrowAddress: walletState.address,
           feeRate,
+          ...(opReturnMessage.trim() ? { opReturnMessage: opReturnMessage.trim() } : {}),
         }),
       });
       const data = await res.json();
@@ -383,6 +387,25 @@ export default function PresenterPage() {
               </div>
             )}
 
+            {/* OP_RETURN message */}
+            <div className="space-y-1">
+              <label className="font-mono text-xs text-muted-foreground uppercase">
+                OP_RETURN message (optional)
+              </label>
+              <input
+                type="text"
+                maxLength={80}
+                value={opReturnMessage}
+                onChange={(e) => setOpReturnMessage(e.target.value)}
+                placeholder="e.g. entropy-roulette-btcpragueconf2025"
+                className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-neon"
+              />
+              <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+                <span>Written on-chain in Tx 1 by the presenter&apos;s wallet</span>
+                <span>{opReturnMessage.length}/80</span>
+              </div>
+            </div>
+
             <Button
               onClick={handleInitialize}
               disabled={isInitializing || !walletState?.signature}
@@ -480,31 +503,45 @@ export default function PresenterPage() {
             {/* Supported wallets */}
             <div className="bg-card border border-border rounded-lg p-6 w-full mt-6">
               <h3 className="font-mono text-sm text-neon mb-4">
-                REQUIRED WALLETS
+                SUPPORTED WALLETS
               </h3>
-              <div className="grid grid-cols-1 gap-4">
-                <div className="p-3 bg-muted/20 rounded-lg text-center">
-                  <div className="font-mono text-sm text-neon">Xverse</div>
-                  <div className="font-mono text-xs text-muted-foreground">
-                    Browser extension required
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { name: "Xverse", note: "Extension / mobile" },
+                  { name: "Unisat", note: "Extension" },
+                  { name: "Leather", note: "Extension" },
+                  { name: "Alby", note: "Extension / Hub" },
+                  { name: "Sparrow", note: "Desktop — PSBT file" },
+                  { name: "BlueWallet", note: "Mobile — PSBT file" },
+                ].map((w) => (
+                  <div key={w.name} className="p-2 bg-muted/20 rounded-lg">
+                    <div className="font-mono text-xs text-neon">{w.name}</div>
+                    <div className="font-mono text-[10px] text-muted-foreground">{w.note}</div>
                   </div>
-                </div>
+                ))}
               </div>
+              <p className="font-mono text-[10px] text-muted-foreground mt-3 leading-relaxed">
+                Extension wallets sign directly in the browser. Sparrow and BlueWallet
+                players download the PSBT file, sign it, and hand the signed file back.
+              </p>
             </div>
           </div>
 
           {/* Right: Educational content */}
           <div className="col-span-7">
             <Tabs defaultValue="learn" className="w-full">
-              <TabsList className="w-full grid grid-cols-3 mb-6">
-                <TabsTrigger value="learn" className="font-mono">
+              <TabsList className="w-full grid grid-cols-4 mb-6">
+                <TabsTrigger value="learn" className="font-mono text-xs">
                   LEARN
                 </TabsTrigger>
-                <TabsTrigger value="how" className="font-mono">
+                <TabsTrigger value="how" className="font-mono text-xs">
                   HOW IT WORKS
                 </TabsTrigger>
-                <TabsTrigger value="players" className="font-mono">
+                <TabsTrigger value="players" className="font-mono text-xs">
                   PLAYERS
+                </TabsTrigger>
+                <TabsTrigger value="timing" className="font-mono text-xs">
+                  TIMING
                 </TabsTrigger>
               </TabsList>
 
@@ -672,6 +709,98 @@ export default function PresenterPage() {
                   )}
                 </div>
               </TabsContent>
+
+              {/* TIMING tab */}
+              <TabsContent value="timing">
+                <div className="bg-card border border-border rounded-lg p-6 space-y-6">
+                  <div>
+                    <h3 className="font-mono text-lg text-neon mb-1">
+                      Session Timing Guide
+                    </h3>
+                    <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                      A typical session runs 20–45 minutes depending on audience size and
+                      connectivity. Use these ranges as a guide — you control the pace.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    {[
+                      {
+                        phase: "Setup & intro",
+                        range: "2–5 min",
+                        note: "Connect wallet, start game, open lobby, explain the rules to the room.",
+                        color: "text-neon",
+                      },
+                      {
+                        phase: "Lobby open — players scan & join",
+                        range: "5–15 min",
+                        note: "Scan QR, open wallet, connect, select UTXO, sign. More players or poor connectivity → more time. Don't rush this.",
+                        color: "text-neon",
+                      },
+                      {
+                        phase: "Close lobby & build PSBT",
+                        range: "1–2 min",
+                        note: "Close lobby once everyone is in. Click BUILD PSBT — the server assembles all inputs.",
+                        color: "text-neon",
+                      },
+                      {
+                        phase: "Players sign their inputs",
+                        range: "2–5 min",
+                        note: "Extension wallets pop a signing dialog. Sparrow/BlueWallet users need extra time for file download + import.",
+                        color: "text-neon",
+                      },
+                      {
+                        phase: "Finalize & broadcast Tx 1",
+                        range: "< 1 min",
+                        note: "Combine all signatures, finalize, broadcast to mainnet.",
+                        color: "text-memphis",
+                      },
+                      {
+                        phase: "Confirmation wait",
+                        range: "10–60 min",
+                        note: "Depends on mempool congestion and the fee rate used. First confirmation triggers winner selection.",
+                        color: "text-memphis",
+                      },
+                      {
+                        phase: "Winner revealed & Tx 2 payout",
+                        range: "2–5 min",
+                        note: "Entropy formula announced. Presenter builds and signs Tx 2 from their wallet to the winner&apos;s address.",
+                        color: "text-memphis",
+                      },
+                    ].map((row) => (
+                      <div
+                        key={row.phase}
+                        className="flex gap-3 p-3 bg-muted/20 rounded-lg"
+                      >
+                        <div className="w-20 flex-shrink-0">
+                          <span className={`font-mono text-xs font-semibold ${row.color}`}>
+                            {row.range}
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-mono text-xs text-foreground mb-0.5">
+                            {row.phase}
+                          </div>
+                          <div className="font-mono text-[10px] text-muted-foreground leading-relaxed">
+                            {row.note}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+                    <p className="font-mono text-xs text-neon">
+                      Confirmation time note
+                    </p>
+                    <p className="font-mono text-xs text-muted-foreground mt-1 leading-relaxed">
+                      If you need a guaranteed slot in the next block, use a higher fee
+                      rate (fastestFee). For workshops where waiting is fine, halfHourFee
+                      or hourFee saves money. Current rate shown in the header.
+                    </p>
+                  </div>
+                </div>
+              </TabsContent>
             </Tabs>
           </div>
         </div>
@@ -758,21 +887,41 @@ export default function PresenterPage() {
 
             <TabsContent value="build" className="flex-1 overflow-auto p-3">
               {session && walletState?.address ? (
-                <PsbtBuilder
-                  players={session.players}
-                  presenterAddress={walletState.address}
-                  feeRate={feeRate}
-                  onPsbtBuilt={(psbt) => {
-                    setCurrentPsbt(psbt);
-                    addLog("info", "PSBT built via builder — share with players for signing");
-                  }}
-                  onFinalized={(rawTx, finalTxid) => {
-                    setTxid(finalTxid);
-                    setRawTxCache(rawTx);
-                    addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
-                    longPulse();
-                  }}
-                />
+                <>
+                  {/* OP_RETURN — presenter-only, written into Tx 1 */}
+                  <div className="mb-3 space-y-1">
+                    <label className="font-mono text-[10px] text-muted-foreground uppercase">
+                      OP_RETURN message
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={80}
+                      value={opReturnMessage}
+                      onChange={(e) => setOpReturnMessage(e.target.value)}
+                      placeholder="optional — written on-chain by your wallet"
+                      className="w-full px-2 py-1.5 bg-muted/20 border border-border rounded font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-neon"
+                    />
+                    <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+                      <span>Max 80 bytes</span>
+                      <span>{opReturnMessage.length}/80</span>
+                    </div>
+                  </div>
+                  <PsbtBuilder
+                    players={session.players}
+                    presenterAddress={walletState.address}
+                    feeRate={feeRate}
+                    onPsbtBuilt={(psbt) => {
+                      setCurrentPsbt(psbt);
+                      addLog("info", "PSBT built via builder — share with players for signing");
+                    }}
+                    onFinalized={(rawTx, finalTxid) => {
+                      setTxid(finalTxid);
+                      setRawTxCache(rawTx);
+                      addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+                      longPulse();
+                    }}
+                  />
+                </>
               ) : (
                 <div className="flex items-center justify-center h-40">
                   <div className="font-mono text-sm text-muted-foreground">

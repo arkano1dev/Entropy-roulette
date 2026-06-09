@@ -50,10 +50,12 @@ export function SparrowLogo({ className = "w-8 h-8" }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <rect width="40" height="40" rx="8" fill="#2D2D2D" />
+      {/* Sparrow bird silhouette */}
       <path
-        d="M20 10C14.48 10 10 14.48 10 20C10 25.52 14.48 30 20 30C25.52 30 30 25.52 30 20C30 14.48 25.52 10 20 10ZM20 14C20.83 14 21.5 14.67 21.5 15.5C21.5 16.33 20.83 17 20 17C19.17 17 18.5 16.33 18.5 15.5C18.5 14.67 19.17 14 20 14ZM24 25H16V23H18V19H17V17H21V23H24V25Z"
+        d="M28 13C28 13 24 11 20 13C18 14 16 16 16 16L10 18L12 20L16 19C16 19 15 22 16 24C17 26 20 27 20 27C20 27 17 25 18 22C19 20 21 20 23 21C25 22 27 23 29 21C31 19 30 16 28 13Z"
         fill="#F7931A"
       />
+      <circle cx="26" cy="15" r="1.5" fill="#2D2D2D" />
     </svg>
   );
 }
@@ -67,12 +69,19 @@ export function AlbyLogo({ className = "w-8 h-8" }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <rect width="40" height="40" rx="8" fill="#FFDF6F" />
-      <ellipse cx="20" cy="22" rx="10" ry="8" fill="#000" />
-      <ellipse cx="20" cy="21" rx="8" ry="6" fill="#FFDF6F" />
-      <circle cx="16" cy="20" r="2" fill="#000" />
-      <circle cx="24" cy="20" r="2" fill="#000" />
-      <ellipse cx="20" cy="13" rx="3" ry="4" fill="#000" />
-      <ellipse cx="20" cy="12" rx="2" ry="3" fill="#FFDF6F" />
+      {/* Alby bee face */}
+      <ellipse cx="20" cy="23" rx="9" ry="7" fill="#000" />
+      <ellipse cx="20" cy="22" rx="7" ry="5.5" fill="#FFDF6F" />
+      {/* Eyes */}
+      <circle cx="17" cy="21" r="2" fill="#000" />
+      <circle cx="23" cy="21" r="2" fill="#000" />
+      <circle cx="17.7" cy="20.3" r="0.7" fill="white" />
+      <circle cx="23.7" cy="20.3" r="0.7" fill="white" />
+      {/* Antennae */}
+      <line x1="17" y1="17" x2="14" y2="12" stroke="#000" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="23" y1="17" x2="26" y2="12" stroke="#000" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="13.5" cy="11.5" r="1.5" fill="#000" />
+      <circle cx="26.5" cy="11.5" r="1.5" fill="#000" />
     </svg>
   );
 }
@@ -86,10 +95,29 @@ export function LeatherLogo({ className = "w-8 h-8" }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <rect width="40" height="40" rx="8" fill="#12100F" />
-      <rect x="10" y="14" width="20" height="12" rx="2" fill="#8B4513" />
-      <rect x="10" y="14" width="20" height="3" fill="#654321" />
-      <rect x="24" y="18" width="4" height="6" rx="1" fill="#FFD700" />
-      <line x1="10" y1="20" x2="30" y2="20" stroke="#654321" strokeWidth="0.5" />
+      {/* Leather "L" lettermark */}
+      <path
+        d="M13 11H17V26H27V29H13V11Z"
+        fill="white"
+      />
+    </svg>
+  );
+}
+
+export function UnisatLogo({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 40 40"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect width="40" height="40" rx="8" fill="#131415" />
+      {/* Unisat U shape */}
+      <path
+        d="M12 11V24C12 27.87 15.13 31 19 31H21C24.87 31 28 27.87 28 24V11H24V24C24 25.66 22.66 27 21 27H19C17.34 27 16 25.66 16 24V11H12Z"
+        fill="#F7931A"
+      />
     </svg>
   );
 }
@@ -127,87 +155,4 @@ export function QRScanLogo({ className = "w-8 h-8" }: { className?: string }) {
       <rect x="22" y="26" width="4" height="4" fill="#00FF66" fillOpacity="0.5" />
     </svg>
   );
-}
-
-// Wallet info type
-export interface WalletInfo {
-  id: string;
-  name: string;
-  description: string;
-  logo: React.ComponentType<{ className?: string }>;
-  type: "mobile" | "extension" | "desktop";
-  deepLink?: (psbtBase64: string) => string;
-  appStoreUrl?: string;
-  playStoreUrl?: string;
-  chromeExtensionUrl?: string;
-  isAvailable?: () => boolean;
-}
-
-// Supported wallets configuration
-export const SUPPORTED_WALLETS: WalletInfo[] = [
-  {
-    id: "xverse",
-    name: "Xverse",
-    description: "Popular Bitcoin & Ordinals wallet",
-    logo: XverseLogo,
-    type: "mobile",
-    deepLink: (psbt) => `xverse://psbt?psbt=${encodeURIComponent(psbt)}&broadcast=false`,
-    appStoreUrl: "https://apps.apple.com/app/xverse-bitcoin-web3-wallet/id1552272513",
-    playStoreUrl: "https://play.google.com/store/apps/details?id=com.xverse.wallet",
-    chromeExtensionUrl: "https://chrome.google.com/webstore/detail/xverse-wallet/idnnbdplmphpflfnlkomgpfbpcgelopg",
-    isAvailable: () => typeof window !== "undefined" && !!(window as any).XverseProviders,
-  },
-  {
-    id: "bluewallet",
-    name: "BlueWallet",
-    description: "Open source Bitcoin wallet",
-    logo: BlueWalletLogo,
-    type: "mobile",
-    deepLink: (psbt) => `bluewallet:psbt?tx=${encodeURIComponent(psbt)}`,
-    appStoreUrl: "https://apps.apple.com/app/bluewallet-bitcoin-wallet/id1376878040",
-    playStoreUrl: "https://play.google.com/store/apps/details?id=io.bluewallet.bluewallet",
-  },
-  {
-    id: "sparrow",
-    name: "Sparrow",
-    description: "Desktop Bitcoin wallet for power users",
-    logo: SparrowLogo,
-    type: "desktop",
-    // Sparrow uses file-based PSBT import
-  },
-  {
-    id: "alby",
-    name: "Alby",
-    description: "Lightning & Bitcoin browser extension",
-    logo: AlbyLogo,
-    type: "extension",
-    chromeExtensionUrl: "https://chrome.google.com/webstore/detail/alby/iokeahhehimjnekafflcihljlcjccdbe",
-    isAvailable: () => typeof window !== "undefined" && !!(window as any).alby,
-  },
-  {
-    id: "leather",
-    name: "Leather",
-    description: "Bitcoin & Stacks browser wallet",
-    logo: LeatherLogo,
-    type: "extension",
-    chromeExtensionUrl: "https://chrome.google.com/webstore/detail/leather/ldinpeekobnhjjdofggfgjlcehhmanlj",
-    isAvailable: () => typeof window !== "undefined" && !!(window as any).LeatherProvider,
-  },
-];
-
-// Get wallet by ID
-export function getWalletById(id: string): WalletInfo | undefined {
-  return SUPPORTED_WALLETS.find((w) => w.id === id);
-}
-
-// Get available extension wallets
-export function getAvailableExtensionWallets(): WalletInfo[] {
-  return SUPPORTED_WALLETS.filter(
-    (w) => w.type === "extension" && w.isAvailable?.()
-  );
-}
-
-// Get mobile wallets
-export function getMobileWallets(): WalletInfo[] {
-  return SUPPORTED_WALLETS.filter((w) => w.type === "mobile");
 }
