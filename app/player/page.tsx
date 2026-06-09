@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import { WalletSelector } from "@/components/wallet/wallet-selector";
@@ -16,7 +16,7 @@ import type { UTXO } from "@/lib/game/types";
 
 type PlayerMode = "setup" | "join" | "wait" | "result";
 
-export default function PlayerPage() {
+function PlayerPageInner() {
   const searchParams = useSearchParams();
   const gameId = searchParams.get("game") || "";
   const presenterPubkey = searchParams.get("presenter") || "";
@@ -473,5 +473,13 @@ export default function PlayerPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PlayerPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <PlayerPageInner />
+    </Suspense>
   );
 }
