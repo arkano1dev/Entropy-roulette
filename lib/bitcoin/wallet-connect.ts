@@ -59,6 +59,52 @@ export function isAlbyAvailable(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Sign-message helpers (used to prove wallet ownership before joining)
+// ---------------------------------------------------------------------------
+
+export async function signMessageWithUnisat(message: string): Promise<{ signature: string; address: string }> {
+  const unisat = (window as any).unisat;
+  if (!unisat) throw new Error("Unisat wallet not detected");
+  const accounts: string[] = await unisat.requestAccounts();
+  const address = accounts[0];
+  const signature: string = await unisat.signMessage(message);
+  return { signature, address };
+}
+
+export async function signMessageWithLeather(message: string): Promise<{ signature: string; address: string }> {
+  const leather = (window as any).LeatherProvider;
+  if (!leather) throw new Error("Leather wallet not detected");
+  // Get address first
+  const addrResponse = await leather.request("getAddresses", { types: ["p2wpkh", "p2tr"] });
+  const addresses = addrResponse?.result?.addresses ?? [];
+  const addr = addresses.find((a: any) => a.type === "p2wpkh") ?? addresses[0];
+  if (!addr) throw new Error("No address returned from Leather");
+  // Sign message
+  const signResponse = await leather.request("signMessage", {
+    message,
+    paymentType: "p2wpkh",
+  });
+  const signature: string = signResponse?.result?.signature;
+  if (!signature) throw new Error("Leather did not return a signature");
+  return { signature, address: addr.address };
+}
+
+export async function signMessageWithAlby(message: string): Promise<{ signature: string; address: string }> {
+  const webln = (window as any).webln;
+  if (!webln) throw new Error("Alby / WebLN not detected");
+  await webln.enable();
+  const bitcoin = (window as any).alby?.bitcoin ?? webln?.bitcoin;
+  if (!bitcoin?.getAddresses) throw new Error("Alby Bitcoin not available. Update to Alby >= 0.6.");
+  const result = await bitcoin.getAddresses();
+  const addr = result?.addresses?.[0];
+  if (!addr) throw new Error("No address returned from Alby");
+  const signResult = await bitcoin.signMessage({ message, address: addr.address });
+  const signature: string = signResult?.signature;
+  if (!signature) throw new Error("Alby did not return a signature");
+  return { signature, address: addr.address };
+}
+
+// ---------------------------------------------------------------------------
 // Unisat wallet
 // ---------------------------------------------------------------------------
 

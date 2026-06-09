@@ -14,13 +14,15 @@ import {
   BlueWalletLogo,
 } from "@/components/wallet/wallet-logos";
 import {
-  isXverseAvailable,
   isUnisatAvailable,
   isLeatherAvailable,
   isAlbyAvailable,
   connectUnisatWallet,
   connectLeatherWallet,
   connectAlbyWallet,
+  signMessageWithUnisat,
+  signMessageWithLeather,
+  signMessageWithAlby,
   signPsbtWithUnisat,
   signPsbtWithLeather,
   signPsbtWithAlby,
@@ -30,6 +32,7 @@ import {
 } from "@/lib/bitcoin/wallet-connect";
 import {
   connectXverseWallet,
+  signMessageWithXverse,
   signPlayerPsbt,
   isSatsConnectAvailable,
 } from "@/lib/bitcoin/sats-connect";
@@ -54,7 +57,6 @@ interface WalletDef {
   type: "extension" | "mobile" | "desktop" | "manual";
   Logo: React.ComponentType<{ className?: string }>;
   installUrl?: string;
-  /** Returns true when the wallet can be used right now */
   isAvailable: () => boolean;
 }
 
@@ -62,7 +64,7 @@ const WALLET_DEFS: WalletDef[] = [
   {
     id: "xverse",
     name: "Xverse",
-    description: "Browser extension / mobile",
+    description: "Extension / mobile",
     type: "extension",
     Logo: XverseLogo,
     installUrl:
@@ -92,7 +94,7 @@ const WALLET_DEFS: WalletDef[] = [
   {
     id: "alby",
     name: "Alby",
-    description: "Browser extension / Alby Hub",
+    description: "Extension / Alby Hub",
     type: "extension",
     Logo: AlbyLogo,
     installUrl:
@@ -102,20 +104,20 @@ const WALLET_DEFS: WalletDef[] = [
   {
     id: "sparrow",
     name: "Sparrow",
-    description: "Desktop wallet — PSBT file import",
+    description: "Desktop — PSBT file",
     type: "desktop",
     Logo: SparrowLogo,
     installUrl: "https://sparrowwallet.com/download/",
-    isAvailable: () => false, // always file-based
+    isAvailable: () => false,
   },
   {
     id: "bluewallet",
     name: "BlueWallet",
-    description: "Mobile — PSBT file import",
+    description: "Mobile — PSBT file",
     type: "mobile",
     Logo: BlueWalletLogo,
     installUrl: "https://bluewallet.io",
-    isAvailable: () => false, // file / deep-link based
+    isAvailable: () => false,
   },
   {
     id: "manual",
@@ -132,24 +134,38 @@ const WALLET_DEFS: WalletDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Props
+// Exported types
 // ---------------------------------------------------------------------------
 
 export interface WalletSignResult {
-  signedPsbt?: string;   // base64 — returned by extension wallets
+  /** base64 signed PSBT — returned by extension wallets */
+  signedPsbt?: string;
   address: string;
   walletId: WalletId;
+  /** Signature from the sign-message step */
+  messageSignature?: string;
   /** For file-based flow: PSBT was downloaded; user must re-upload */
   needsUpload?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
 interface WalletSelectorProps {
-  /** The PSBT to be signed — may be null while waiting for presenter */
-  psbtBase64: string | null;
+  /**
+   * "sign-message" — prove wallet ownership before joining (no PSBT needed yet).
+   * "sign-psbt"    — sign the actual game PSBT once it has been published.
+   */
+  mode: "sign-message" | "sign-psbt";
+  /** The PSBT to sign — only needed when mode === "sign-psbt" */
+  psbtBase64?: string | null;
   /** Player's input index inside the PSBT */
   inputIndex?: number;
   betAmount: number;
+  /** Called when message or PSBT has been signed */
   onSignComplete: (result: WalletSignResult) => void;
+  /** Called when user wants address-only (manual) entry */
   onManualSign: (address: string) => void;
 }
 
@@ -158,13 +174,16 @@ interface WalletSelectorProps {
 // ---------------------------------------------------------------------------
 
 export function WalletSelector({
-  psbtBase64,
+  mode,
+  psbtBase64 = null,
   inputIndex = 0,
   betAmount,
   onSignComplete,
   onManualSign,
 }: WalletSelectorProps) {
-  const [detectedWallets, setDetectedWallets] = useState<Set<WalletId>>(new Set());
+  const [detectedWallets, setDetectedWallets] = useState<Set<WalletId>>(
+    new Set()
+  );
   const [selected, setSelected] = useState<WalletId | null>(null);
   const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -181,17 +200,16 @@ export function WalletSelector({
     if (isLeatherAvailable()) detected.add("leather");
     if (isAlbyAvailable()) detected.add("alby");
     setDetectedWallets(detected);
-
-    // Auto-select if exactly one extension wallet detected
-    if (detected.size === 1) {
-      setSelected([...detected][0]);
-    }
+    if (detected.size === 1) setSelected([...detected][0]);
   }, []);
 
   const wallet = selected ? WALLET_DEFS.find((w) => w.id === selected) : null;
   const isExtension = wallet?.type === "extension";
-  const isFileBased = wallet?.type === "desktop" || wallet?.type === "mobile";
+  const isFileBased =
+    wallet?.type === "desktop" || wallet?.type === "mobile";
   const isManual = wallet?.type === "manual";
+
+  const MESSAGE_TO_SIGN = "I want to play Entropy Roulette";
 
   // Step A: connect wallet (get address)
   const handleConnect = async () => {
@@ -232,39 +250,78 @@ export function WalletSelector({
     }
   };
 
-  // Step B: sign PSBT
-  const handleSign = async () => {
+  // Step B-sign-message: prove ownership
+  const handleSignMessage = async () => {
+    if (!selected || !connectedAddress) return;
+    setError(null);
+    setIsSigning(true);
+    try {
+      let signature = "";
+      switch (selected) {
+        case "xverse":
+          signature = await signMessageWithXverse(MESSAGE_TO_SIGN, connectedAddress);
+          break;
+        case "unisat": {
+          const r = await signMessageWithUnisat(MESSAGE_TO_SIGN);
+          signature = r.signature;
+          break;
+        }
+        case "leather": {
+          const r = await signMessageWithLeather(MESSAGE_TO_SIGN);
+          signature = r.signature;
+          break;
+        }
+        case "alby": {
+          const r = await signMessageWithAlby(MESSAGE_TO_SIGN);
+          signature = r.signature;
+          break;
+        }
+        default:
+          break;
+      }
+      onSignComplete({
+        address: connectedAddress,
+        walletId: selected,
+        messageSignature: signature,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Signing failed");
+    } finally {
+      setIsSigning(false);
+    }
+  };
+
+  // Step B-sign-psbt: sign the game PSBT
+  const handleSignPsbt = async () => {
     if (!selected || !psbtBase64 || !connectedAddress) return;
     setError(null);
     setIsSigning(true);
     try {
       let signedPsbt = "";
       switch (selected) {
-        case "xverse": {
+        case "xverse":
           signedPsbt = await signPlayerPsbt(psbtBase64, connectedAddress, inputIndex);
           break;
-        }
         case "unisat": {
           const hex = psbtBase64ToHex(psbtBase64);
           const signedHex = await signPsbtWithUnisat(hex, { autoFinalized: false });
-          // Convert signed hex back to base64
           signedPsbt = btoa(
-            signedHex.match(/.{1,2}/g)!.map((b) => String.fromCharCode(parseInt(b, 16))).join("")
+            signedHex
+              .match(/.{1,2}/g)!
+              .map((b) => String.fromCharCode(parseInt(b, 16)))
+              .join("")
           );
           break;
         }
-        case "leather": {
+        case "leather":
           signedPsbt = await signPsbtWithLeather(psbtBase64, inputIndex);
           break;
-        }
-        case "alby": {
+        case "alby":
           signedPsbt = await signPsbtWithAlby(psbtBase64, inputIndex);
           break;
-        }
         default:
           break;
       }
-
       onSignComplete({ signedPsbt, address: connectedAddress, walletId: selected });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Signing failed");
@@ -279,6 +336,18 @@ export function WalletSelector({
     downloadPsbtFile(psbtBase64, "entropy-roulette.psbt");
     setDownloadDone(true);
   };
+
+  const actionLabel =
+    mode === "sign-message"
+      ? `Sign with ${wallet?.name ?? "wallet"}`
+      : `Sign PSBT with ${wallet?.name ?? "wallet"}`;
+
+  const signHandler =
+    mode === "sign-message" ? handleSignMessage : handleSignPsbt;
+  const signDisabled =
+    isSigning ||
+    (mode === "sign-psbt" && !psbtBase64);
+  const signWaiting = mode === "sign-psbt" && !psbtBase64;
 
   return (
     <div className="w-full space-y-5">
@@ -364,7 +433,10 @@ export function WalletSelector({
                     className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
                   >
                     {isConnecting ? (
-                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Connecting...</>
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Connecting...
+                      </>
                     ) : (
                       `Connect ${wallet?.name}`
                     )}
@@ -374,28 +446,33 @@ export function WalletSelector({
                 {connectedAddress && (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between p-3 bg-neon/10 border border-neon/30 rounded-lg">
-                      <span className="font-mono text-xs text-muted-foreground">Connected</span>
+                      <span className="font-mono text-xs text-muted-foreground">
+                        Connected
+                      </span>
                       <span className="font-mono text-xs text-neon">
                         {truncateAddress(connectedAddress, 10)}
                       </span>
                     </div>
 
-                    {psbtBase64 ? (
-                      <Button
-                        onClick={handleSign}
-                        disabled={isSigning}
-                        className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-5"
-                      >
-                        {isSigning ? (
-                          <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Signing...</>
-                        ) : (
-                          `Sign PSBT with ${wallet?.name}`
-                        )}
-                      </Button>
-                    ) : (
+                    {signWaiting ? (
                       <div className="p-3 bg-muted/20 rounded-lg text-center font-mono text-xs text-muted-foreground">
                         Waiting for presenter to publish PSBT...
                       </div>
+                    ) : (
+                      <Button
+                        onClick={signHandler}
+                        disabled={signDisabled}
+                        className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-5"
+                      >
+                        {isSigning ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Signing...
+                          </>
+                        ) : (
+                          actionLabel
+                        )}
+                      </Button>
                     )}
 
                     <button
@@ -415,54 +492,67 @@ export function WalletSelector({
             {/* --- File-based wallets (Sparrow, BlueWallet) --- */}
             {isFileBased && (
               <div className="space-y-3">
-                <div className="p-3 bg-muted/20 border border-border rounded-lg">
-                  <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                    {wallet?.name === "Sparrow"
-                      ? "Sparrow is a desktop wallet. Download the PSBT file, open it in Sparrow (File → Open Transaction), sign your input, and export the signed PSBT."
-                      : "BlueWallet supports PSBT files. Download the file and open it in BlueWallet using the Send → PSBT workflow."}
-                  </p>
-                </div>
-
-                {psbtBase64 ? (
-                  <Button
-                    onClick={handleDownload}
-                    className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    {downloadDone ? "Downloaded — sign in " + wallet?.name : "Download PSBT file"}
-                  </Button>
+                {mode === "sign-message" ? (
+                  // File wallets can't sign messages in-browser — ask for address
+                  <div className="p-3 bg-muted/20 border border-border rounded-lg">
+                    <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                      {wallet?.name} does not support in-browser message
+                      signing. Enter your receiving address below to join — you
+                      will sign your PSBT input later using a downloaded file.
+                    </p>
+                  </div>
                 ) : (
-                  <div className="p-3 bg-muted/20 rounded-lg text-center font-mono text-xs text-muted-foreground">
-                    Waiting for presenter to publish PSBT...
-                  </div>
+                  <>
+                    <div className="p-3 bg-muted/20 border border-border rounded-lg">
+                      <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                        {wallet?.name === "Sparrow"
+                          ? "Download the PSBT file, open it in Sparrow (File → Open Transaction), sign your input, and return the signed file to the presenter."
+                          : "Download the PSBT file and open it in BlueWallet via Send → PSBT to sign your input."}
+                      </p>
+                    </div>
+
+                    {psbtBase64 ? (
+                      <Button
+                        onClick={handleDownload}
+                        className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        {downloadDone
+                          ? `Downloaded — sign in ${wallet?.name}`
+                          : "Download PSBT file"}
+                      </Button>
+                    ) : (
+                      <div className="p-3 bg-muted/20 rounded-lg text-center font-mono text-xs text-muted-foreground">
+                        Waiting for presenter to publish PSBT...
+                      </div>
+                    )}
+
+                    {downloadDone && (
+                      <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+                        <p className="font-mono text-xs text-neon">
+                          After signing in {wallet?.name}, give the signed PSBT
+                          to the presenter.
+                        </p>
+                      </div>
+                    )}
+
+                    {wallet?.installUrl && (
+                      <a
+                        href={wallet.installUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-neon"
+                      >
+                        Get {wallet.name}
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </>
                 )}
 
-                {downloadDone && (
-                  <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg space-y-2">
-                    <p className="font-mono text-xs text-neon">
-                      After signing in {wallet?.name}, give the signed PSBT to the presenter.
-                    </p>
-                    <p className="font-mono text-xs text-muted-foreground">
-                      The presenter will combine all signatures and broadcast.
-                    </p>
-                  </div>
-                )}
-
-                {wallet?.installUrl && (
-                  <a
-                    href={wallet.installUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-neon"
-                  >
-                    Get {wallet.name}
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
-
-                {/* Manual address entry for file wallets so we can register the player */}
+                {/* Always show address entry for file wallets */}
                 <ManualAddressEntry
-                  label="Your receiving address (for payout if you win)"
+                  label="Your Bitcoin address (for payout)"
                   onSubmit={(addr) => onManualSign(addr)}
                   betAmount={betAmount}
                 />
