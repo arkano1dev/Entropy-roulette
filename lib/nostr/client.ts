@@ -7,8 +7,9 @@ import {
   getPublicKey,
   finalizeEvent,
   type Event,
-  type Filter,
 } from "nostr-tools";
+// Use a loose Filter type to avoid `#x` index signature conflicts with nostr-tools
+type Filter = Record<string, unknown>;
 import { NOSTR_RELAYS, NOSTR_KINDS } from "@/lib/game/types";
 import type { GameSession } from "@/lib/game/types";
 
@@ -342,7 +343,7 @@ export function subscribeToGameSession(
 
   const sub = p.subscribeMany(
     NOSTR_RELAYS as unknown as string[],
-    [filter],
+    filter as import("nostr-tools").Filter,
     {
       onevent: onEvent,
     }
@@ -366,7 +367,7 @@ export function subscribeToPlayerJoins(
 
   const sub = p.subscribeMany(
     NOSTR_RELAYS as unknown as string[],
-    [filter],
+    filter as import("nostr-tools").Filter,
     {
       onevent: onEvent,
     }
@@ -390,7 +391,7 @@ export function subscribeToPsbtFragments(
 
   const sub = p.subscribeMany(
     NOSTR_RELAYS as unknown as string[],
-    [filter],
+    filter as import("nostr-tools").Filter,
     {
       onevent: onEvent,
     }
@@ -414,7 +415,7 @@ export function subscribeToPsbtPublish(
 
   const sub = p.subscribeMany(
     NOSTR_RELAYS as unknown as string[],
-    [filter],
+    filter as import("nostr-tools").Filter,
     {
       onevent: onEvent,
     }
@@ -438,7 +439,7 @@ export function subscribeToGameState(
 
   const sub = p.subscribeMany(
     NOSTR_RELAYS as unknown as string[],
-    [filter],
+    filter as import("nostr-tools").Filter,
     {
       onevent: onEvent,
     }
@@ -462,13 +463,23 @@ export function subscribeToGameResult(
 
   const sub = p.subscribeMany(
     NOSTR_RELAYS as unknown as string[],
-    [filter],
+    filter as import("nostr-tools").Filter,
     {
       onevent: onEvent,
     }
   );
 
   return () => sub.close();
+}
+
+// Augment window with NIP-07 nostr extension type
+declare global {
+  interface Window {
+    nostr?: {
+      getPublicKey(): Promise<string>;
+      signEvent(event: Omit<Event, "sig">): Promise<Event>;
+    };
+  }
 }
 
 // Check for NIP-07 extension (Alby, nos2x, etc.)

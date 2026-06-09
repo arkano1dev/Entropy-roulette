@@ -138,7 +138,8 @@ export function WaitingRoom({
         <div className="mt-8">
           <div className="flex items-center justify-center gap-2">
             {["LOBBY", "SIGN", "BROADCAST", "CONFIRM"].map((step, index) => {
-              const phaseIndex = {
+              const phaseIndex: Record<string, number> = {
+                IDLE: 0,
                 LOBBY_OPEN: 0,
                 LOBBY_CLOSED: 0,
                 COLLECTING_SIGNATURES: 1,
@@ -146,10 +147,11 @@ export function WaitingRoom({
                 BROADCAST: 2,
                 CONFIRMED: 3,
                 COMPLETE: 3,
-              }[phase] ?? 0;
+              };
+              const activeIndex = phaseIndex[phase] ?? 0;
 
-              const isActive = index <= phaseIndex;
-              const isCurrent = index === phaseIndex;
+              const isActive = index <= activeIndex;
+              const isCurrent = index === activeIndex;
 
               return (
                 <div key={step} className="flex items-center">

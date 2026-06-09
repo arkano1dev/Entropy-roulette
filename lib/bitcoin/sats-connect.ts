@@ -1,7 +1,7 @@
 "use client";
 
 // SatsConnect / Xverse integration wrapper
-import { request } from "sats-connect";
+import { request, AddressPurpose } from "sats-connect";
 import type { BitcoinProvider } from "sats-connect";
 
 // Wallet info after connection
@@ -34,14 +34,17 @@ export function getXverseProvider(): BitcoinProvider | null {
 // Connect wallet and get payment address
 export async function connectXverseWallet(): Promise<XverseWalletInfo> {
   const response = await request("wallet_connect", {
-    addresses: ["payment"],
+    addresses: [AddressPurpose.Payment],
   });
 
   if (response.status === "error") {
     throw new Error(response.error?.message || "Wallet connection failed");
   }
 
-  const addr = response.result.addresses[0];
+  const addresses = response.result.addresses ?? [];
+  const addr = addresses.find(
+    (a) => a.purpose === AddressPurpose.Payment
+  ) ?? addresses[0];
   if (!addr) {
     throw new Error("No payment address returned from wallet");
   }
@@ -49,7 +52,7 @@ export async function connectXverseWallet(): Promise<XverseWalletInfo> {
   return {
     address: addr.address,
     publicKey: addr.publicKey,
-    type: addr.addressType === "p2tr" ? "ordinals" : "payment",
+    type: addr.purpose === AddressPurpose.Ordinals ? "ordinals" : "payment",
   };
 }
 
@@ -117,7 +120,7 @@ export async function signPresenterPsbt(
 // Disconnect wallet (best-effort)
 export async function disconnectXverseWallet(): Promise<void> {
   try {
-    await request("wallet_disconnect", {});
+    await request("wallet_disconnect", null);
   } catch {
     // Ignore disconnect errors
   }

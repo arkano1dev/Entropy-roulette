@@ -5,11 +5,14 @@ import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import { WalletSelector } from "@/components/wallet/wallet-selector";
 import { EducationalSlides } from "@/components/game/educational-slides";
+import { UtxoPicker } from "@/components/game/utxo-picker";
 import { usePlayerGame, useHaptic } from "@/hooks/use-game";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
-import { getAddressUTXOs, getFeeEstimates } from "@/lib/bitcoin/mempool-api";
+import { getFeeEstimates } from "@/lib/bitcoin/mempool-api";
+import { connectXverseWallet, signPlayerPsbt, isSatsConnectAvailable } from "@/lib/bitcoin/sats-connect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { UTXO } from "@/lib/game/types";
 
 type PlayerMode = "setup" | "join" | "wait" | "result";
 
@@ -36,6 +39,12 @@ export default function PlayerPage() {
   const [hasManualEntry, setHasManualEntry] = useState(false);
   const [signedPsbt, setSignedPsbt] = useState<string | null>(null);
   const [feeRate, setFeeRate] = useState(10);
+  // Wallet + UTXO state for the new PSBT signing flow
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
+  const [isConnectingWallet, setIsConnectingWallet] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [isSigningPsbt, setIsSigningPsbt] = useState(false);
   const [txStatus, setTxStatus] = useState<
     | "building"
     | "signing"
@@ -49,6 +58,55 @@ export default function PlayerPage() {
   useEffect(() => {
     getFeeEstimates().then((fees) => setFeeRate(fees.halfHourFee));
   }, []);
+
+  // Connect Xverse wallet and get address
+  const handleConnectWallet = async () => {
+    setWalletError(null);
+    setIsConnectingWallet(true);
+    try {
+      const info = await connectXverseWallet();
+      setWalletAddress(info.address);
+      setJoinedAddress(info.address);
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : "Wallet connection failed");
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  // Sign the presenter's published PSBT with the player's selected UTXO input
+  const handleSignPublishedPsbt = async () => {
+    if (!publishedPsbt || !walletAddress || !selectedUtxo) return;
+    setWalletError(null);
+    setIsSigningPsbt(true);
+    try {
+      // Build an updated PSBT with player's UTXO added
+      const addRes = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add-player",
+          psbtBase64: publishedPsbt,
+          utxo: selectedUtxo,
+          receivingAddress: walletAddress,
+          contributionSats: betAmount,
+        }),
+      });
+      const addData = await addRes.json();
+      if (!addData.success) throw new Error(addData.error);
+
+      // Find the input index for this player's UTXO (last input added)
+      const inputIndex = addData.data.inputCount - 1;
+
+      // Sign with Xverse
+      const signed = await signPlayerPsbt(addData.data.psbtBase64, walletAddress, inputIndex);
+      await handleSignComplete(signed, walletAddress);
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : "Signing failed");
+    } finally {
+      setIsSigningPsbt(false);
+    }
+  };
 
   // Transition to join mode
   const handleJoin = () => {
@@ -189,23 +247,126 @@ export default function PlayerPage() {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="max-w-md mx-auto w-full"
+          className="max-w-md mx-auto w-full space-y-4"
         >
-          <div className="bg-card border border-border rounded-lg p-6 mb-4">
-            <div className="font-mono text-lg text-neon text-center mb-2">
-              CONNECT WALLET
+          {/* Step 1: Connect Wallet */}
+          <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+            <div className="font-mono text-sm text-neon uppercase">
+              Step 1 — Connect Wallet
             </div>
-            <div className="font-mono text-xs text-muted-foreground text-center">
-              Connect your Xverse wallet and select a UTXO to fund your bet.
-            </div>
+            {walletAddress ? (
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-xs text-muted-foreground">Connected</span>
+                <span className="font-mono text-xs text-neon">
+                  {walletAddress.slice(0, 12)}...{walletAddress.slice(-6)}
+                </span>
+              </div>
+            ) : (
+              <>
+                {isSatsConnectAvailable() ? (
+                  <Button
+                    onClick={handleConnectWallet}
+                    disabled={isConnectingWallet}
+                    className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
+                  >
+                    {isConnectingWallet ? "CONNECTING..." : "CONNECT XVERSE"}
+                  </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="font-mono text-xs text-muted-foreground">
+                      Xverse wallet not detected. Enter your address manually:
+                    </p>
+                    <Input
+                      placeholder="bc1q... or 1... or 3..."
+                      className="font-mono text-xs"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (val.length > 20) {
+                          setWalletAddress(val);
+                          setJoinedAddress(val);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
-          <WalletSelector
-            psbtBase64={publishedPsbt || ""}
-            betAmount={betAmount}
-            onSignComplete={handleSignComplete}
-            onManualSign={handleManualJoin}
-          />
+          {/* Step 2: Pick UTXO (only after wallet connected) */}
+          {walletAddress && (
+            <div className="bg-card border border-border rounded-lg p-6">
+              <div className="font-mono text-sm text-neon uppercase mb-4">
+                Step 2 — Select UTXO
+              </div>
+              <UtxoPicker
+                address={walletAddress}
+                minSats={betAmount}
+                onSelect={setSelectedUtxo}
+                selectedTxid={
+                  selectedUtxo ? `${selectedUtxo.txid}:${selectedUtxo.vout}` : undefined
+                }
+              />
+            </div>
+          )}
+
+          {/* Step 3: Sign the PSBT (only if UTXO selected + PSBT published) */}
+          {walletAddress && selectedUtxo && (
+            <div className="bg-card border border-border rounded-lg p-6 space-y-3">
+              <div className="font-mono text-sm text-neon uppercase">
+                Step 3 — Sign PSBT
+              </div>
+              <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+                <div className="text-muted-foreground">Bet amount</div>
+                <div className="text-neon text-right">{betAmount.toLocaleString()} sats</div>
+                <div className="text-muted-foreground">Selected UTXO</div>
+                <div className="text-foreground text-right">{selectedUtxo.value.toLocaleString()} sats</div>
+                <div className="text-muted-foreground">PSBT ready</div>
+                <div className={`text-right ${publishedPsbt ? "text-neon" : "text-muted-foreground"}`}>
+                  {publishedPsbt ? "YES" : "WAITING..."}
+                </div>
+              </div>
+
+              {walletError && (
+                <div className="bg-glitch/10 border border-glitch/30 rounded p-2">
+                  <p className="font-mono text-xs text-glitch">{walletError}</p>
+                </div>
+              )}
+
+              {publishedPsbt ? (
+                <Button
+                  onClick={handleSignPublishedPsbt}
+                  disabled={isSigningPsbt}
+                  className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
+                >
+                  {isSigningPsbt ? "SIGNING..." : "SIGN WITH XVERSE"}
+                </Button>
+              ) : (
+                <div className="text-center py-2">
+                  <p className="font-mono text-xs text-muted-foreground">
+                    Waiting for presenter to publish PSBT...
+                  </p>
+                </div>
+              )}
+
+              <button
+                onClick={() => handleManualJoin(walletAddress)}
+                className="w-full font-mono text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Join without signing (manual / watch-only)
+              </button>
+            </div>
+          )}
+
+          {/* Fallback: original wallet selector for no-UTXO flow */}
+          {!walletAddress && !isSatsConnectAvailable() && publishedPsbt && (
+            <WalletSelector
+              psbtBase64={publishedPsbt}
+              betAmount={betAmount}
+              onSignComplete={handleSignComplete}
+              onManualSign={handleManualJoin}
+            />
+          )}
         </motion.div>
       )}
 
