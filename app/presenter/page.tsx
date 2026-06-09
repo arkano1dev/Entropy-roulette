@@ -21,8 +21,9 @@ import {
 } from "@/lib/bitcoin/psbt-engine";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ChevronDown, ChevronUp } from "lucide-react";
 
-type PresenterMode = "setup" | "educate" | "game";
+type PresenterMode = "setup" | "game";
 
 export default function PresenterPage() {
   const {
@@ -50,33 +51,31 @@ export default function PresenterPage() {
       timestamp: number;
       type: "info" | "success" | "warning" | "error" | "system";
       message: string;
-    }
-  >>([]);
+    }>
+  >([]);
   const [blockHeight, setBlockHeight] = useState<number | null>(null);
   const [feeRate, setFeeRate] = useState<number>(10);
   const [txid, setTxid] = useState<string | null>(null);
   const [payoutTxid, setPayoutTxid] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
-  const [showEducation, setShowEducation] = useState(true);
+
+  // Whether the education panel (below QR) is expanded
+  const [educationOpen, setEducationOpen] = useState(true);
 
   // Wallet state
-  const [walletState, setWalletState] = useState<PresenterWalletState | undefined>(
-    undefined
-  );
+  const [walletState, setWalletState] = useState<PresenterWalletState | undefined>(undefined);
 
   // PSBT state
   const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
   const [rawTxCache, setRawTxCache] = useState<string | null>(null);
 
-  // OP_RETURN message (presenter only, max 80 bytes)
+  // OP_RETURN message — required, set at setup, carried through to build
   const [opReturnMessage, setOpReturnMessage] = useState("");
+  const opReturnValid = opReturnMessage.trim().length > 0 && opReturnMessage.length <= 80;
 
   // Add log entry
   const addLog = useCallback(
-    (
-      type: "info" | "success" | "warning" | "error" | "system",
-      message: string
-    ) => {
+    (type: "info" | "success" | "warning" | "error" | "system", message: string) => {
       setLogs((prev) => [...prev, createLogEntry(type, message)]);
     },
     []
@@ -94,14 +93,14 @@ export default function PresenterPage() {
         setFeeRate(fees.halfHourFee);
         addLog("system", `Connected to mempool.space | Block: ${height}`);
         addLog("system", `Fee rate: ${fees.halfHourFee} sat/vB`);
-      } catch (err) {
+      } catch {
         addLog("error", "Failed to connect to mempool.space");
       }
     };
     fetchData();
   }, [addLog]);
 
-  // Handle initialization (requires wallet + signature)
+  // Handle initialization
   const handleInitialize = async () => {
     if (!walletState?.connected) {
       addLog("error", "Connect Xverse wallet first");
@@ -111,18 +110,18 @@ export default function PresenterPage() {
       addLog("error", "Sign the game creation message first");
       return;
     }
+    if (!opReturnValid) {
+      addLog("error", "OP_RETURN message is required (1–80 bytes)");
+      return;
+    }
 
     try {
       addLog("system", "Initializing entropy field...");
       const newSession = await initializeGame();
-      // Set presenter's escrow address
-      if (walletState.address) {
-        // Store in session state manually (we'll augment usePresenterGame later)
-      }
       addLog("success", `Game created: ${newSession.id.toUpperCase()}`);
+      addLog("info", `OP_RETURN: "${opReturnMessage.trim()}"`);
       addLog("info", "Escrow address: presenter wallet (Tx 1)");
-      addLog("info", "Payout will be Tx 2 after winner determined");
-      setMode("educate");
+      setMode("game");
       longPulse();
     } catch (err) {
       addLog("error", `Initialization failed: ${err}`);
@@ -133,30 +132,26 @@ export default function PresenterPage() {
   const handleOpenLobby = async () => {
     addLog("system", "Opening entropy lobby...");
     await openLobby();
-    addLog("success", "Lobby is now open - players can join");
+    addLog("success", "Lobby is now open — players can join");
     longPulse();
   };
 
   // Handle lobby close
   const handleCloseLobby = async () => {
-    addLog("warning", "Closing lobby - no more players can join");
+    addLog("warning", "Closing lobby — no more players can join");
     await closeLobby();
-    addLog("success", `Lobby closed with ${session?.players.length} players`);
+    addLog("success", `Lobby closed with ${session?.players.length ?? 0} players`);
     longPulse();
   };
 
-  // Handle signature collection — now builds PSBT via /api/psbt
+  // Handle signature collection — builds PSBT via /api/psbt
   const handleCollectSignatures = async () => {
     if (!session || !walletState?.address) return;
 
-    addLog("system", "Initiating signature collection...");
+    addLog("system", "Building PSBT...");
 
     try {
       const playersWithUtxo = session.players.filter((p) => p.utxo);
-      if (playersWithUtxo.length === 0) {
-        addLog("error", "No player UTXOs found — players must select UTXOs first");
-        return;
-      }
 
       // Build escrow PSBT via real API route
       const res = await fetch("/api/psbt", {
@@ -167,7 +162,7 @@ export default function PresenterPage() {
           players: playersWithUtxo.map((p) => ({ utxo: p.utxo })),
           escrowAddress: walletState.address,
           feeRate,
-          ...(opReturnMessage.trim() ? { opReturnMessage: opReturnMessage.trim() } : {}),
+          opReturnMessage: opReturnMessage.trim(),
         }),
       });
       const data = await res.json();
@@ -176,7 +171,8 @@ export default function PresenterPage() {
       const escrowPsbt = data.data.psbtBase64;
       setCurrentPsbt(escrowPsbt);
       addLog("info", `PSBT built: ${data.data.inputCount} inputs → escrow`);
-      addLog("info", `Estimated fee: ${data.data.estimatedFee.toLocaleString()} sats`);
+      addLog("info", `OP_RETURN embedded: "${opReturnMessage.trim()}"`);
+      addLog("info", `Fee: ${data.data.estimatedFee.toLocaleString()} sats`);
 
       // Publish PSBT to Nostr for players
       await publishPsbtForSigning(escrowPsbt);
@@ -190,7 +186,7 @@ export default function PresenterPage() {
     }
   };
 
-  // Handle PSBT finalization — combine player sigs via /api/psbt then finalize
+  // Handle PSBT finalization
   const handleFinalize = async () => {
     if (!session || session.players.length === 0 || !currentPsbt) return;
 
@@ -206,7 +202,6 @@ export default function PresenterPage() {
         return;
       }
 
-      // Combine base PSBT with all signed fragments
       const allPsbts = [currentPsbt, ...signedPsbts];
       const combineRes = await fetch("/api/psbt", {
         method: "POST",
@@ -216,7 +211,6 @@ export default function PresenterPage() {
       const combineData = await combineRes.json();
       if (!combineData.success) throw new Error(combineData.error);
 
-      // Finalize and extract raw tx
       const finalRes = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -230,9 +224,7 @@ export default function PresenterPage() {
 
       const { rawTx, txid: finalTxid } = finalData.data;
       setTxid(finalTxid);
-      // Store raw tx for broadcast (attach to finalized psbt state)
       await setFinalizedPsbt(finalData.data.finalizedPsbt, finalTxid);
-      // Temporarily cache rawTx for broadcast step
       setRawTxCache(rawTx);
 
       addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
@@ -242,7 +234,7 @@ export default function PresenterPage() {
     }
   };
 
-  // Handle broadcast (Tx 1) via /api/psbt broadcast action
+  // Handle broadcast (Tx 1)
   const handleBroadcast = async () => {
     if (!session || !txid) return;
 
@@ -262,8 +254,7 @@ export default function PresenterPage() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      const broadcastedTxid = data.data.txid;
-      addLog("success", `Tx 1 broadcast! TXID: ${broadcastedTxid.slice(0, 16)}...`);
+      addLog("success", `Tx 1 broadcast! TXID: ${data.data.txid.slice(0, 16)}...`);
       addLog("info", "Waiting for block confirmation...");
       setIsPolling(true);
       setRawTxCache(null);
@@ -284,24 +275,15 @@ export default function PresenterPage() {
           setIsPolling(false);
           addLog("success", `Tx 1 CONFIRMED in block ${status.block_height}!`);
 
-          const { winnerIndex, entropyByte, calculation } = calculateWinner(
-            txid,
-            session.players.length
-          );
-
+          const { winnerIndex, calculation } = calculateWinner(txid, session.players.length);
           const winner = session.players[winnerIndex];
-          addLog("system", `Entropy calculation: ${calculation}`);
-          addLog(
-            "success",
-            `WINNER: ${winner.displayName} (Index ${winnerIndex})`
-          );
+          addLog("system", `Entropy: ${calculation}`);
+          addLog("success", `WINNER: ${winner.displayName} (Index ${winnerIndex})`);
 
           await confirmAndResolve(txid);
           victoryPulse();
 
-          // Tx 2 payout: build via /api/psbt using escrow UTXO from Tx 1
-          // The presenter must sign this manually — a separate flow handles it
-          addLog("info", `Winner: ${winner.displayName} — initiate Tx 2 payout manually`);
+          addLog("info", `Winner: ${winner.displayName} — initiate Tx 2 payout`);
           addLog("info", `Escrow UTXO: ${txid.slice(0, 12)}...#0 → ${winner.receivingAddress?.slice(0, 12) ?? "unknown"}...`);
         }
       } catch {
@@ -310,17 +292,14 @@ export default function PresenterPage() {
     }, 10000);
 
     return () => clearInterval(pollInterval);
-  }, [isPolling, txid, session, addLog, confirmAndResolve, victoryPulse, walletState, totalPot, feeRate]);
+  }, [isPolling, txid, session, addLog, confirmAndResolve, victoryPulse, walletState, feeRate, totalPot]);
 
   // Log player joins
   useEffect(() => {
     if (session?.players) {
       const lastPlayer = session.players[session.players.length - 1];
       if (lastPlayer && session.phase === "LOBBY_OPEN") {
-        addLog(
-          "info",
-          `Player joined: ${lastPlayer.displayName} (${formatSats(lastPlayer.amount)})`
-        );
+        addLog("info", `Player joined: ${lastPlayer.displayName} (${formatSats(lastPlayer.amount)})`);
         longPulse();
       }
     }
@@ -329,12 +308,13 @@ export default function PresenterPage() {
   // Generate join URL
   const getJoinUrl = () => {
     if (!session || !keypair) return "";
-    const baseUrl =
-      typeof window !== "undefined" ? window.location.origin : "";
+    const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     return `${baseUrl}/player?game=${session.id}&presenter=${keypair.pubkey}`;
   };
 
-  // Setup screen
+  // ---------------------------------------------------------------------------
+  // SETUP SCREEN
+  // ---------------------------------------------------------------------------
   if (mode === "setup") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-8">
@@ -343,25 +323,14 @@ export default function PresenterPage() {
           animate={{ opacity: 1, y: 0 }}
           className="max-w-md w-full bg-card border border-border rounded-lg p-8"
         >
-          <h1 className="font-mono text-2xl text-neon mb-2 text-center">
+          <h1 className="font-mono text-2xl text-neon mb-1 text-center">
             ENTROPY ROULETTE
           </h1>
-          <p className="font-mono text-sm text-muted-foreground text-center mb-8">
-            Presenter Configuration
+          <p className="font-mono text-xs text-muted-foreground text-center mb-8">
+            Presenter setup
           </p>
 
-          <div className="space-y-6">
-            <div className="p-4 bg-neon/10 border border-neon/30 rounded-lg">
-              <div className="font-mono text-sm text-neon mb-2">
-                HOW IT WORKS
-              </div>
-              <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                Players join with their Xverse wallet. All inputs are combined into
-                Tx 1 (escrow to your address). The TXID entropy determines the winner.
-                Tx 2 pays the winner from escrow.
-              </p>
-            </div>
-
+          <div className="space-y-5">
             {/* Xverse Connect */}
             <XverseConnectPresenter
               onConnect={setWalletState}
@@ -369,56 +338,59 @@ export default function PresenterPage() {
               connectedState={walletState}
             />
 
-            <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
-              <span className="font-mono text-sm text-muted-foreground">
-                Network Fee Rate
-              </span>
-              <span className="font-mono text-neon">{feeRate} sat/vB</span>
-            </div>
-
-            {blockHeight && (
-              <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
-                <span className="font-mono text-sm text-muted-foreground">
-                  Block Height
-                </span>
-                <span className="font-mono text-neon">
-                  {blockHeight.toLocaleString()}
-                </span>
-              </div>
-            )}
-
-            {/* OP_RETURN message */}
+            {/* OP_RETURN — required */}
             <div className="space-y-1">
-              <label className="font-mono text-xs text-muted-foreground uppercase">
-                OP_RETURN message (optional)
+              <label className="font-mono text-xs text-neon uppercase">
+                OP_RETURN message
+                <span className="text-glitch ml-1">*</span>
               </label>
               <input
                 type="text"
                 maxLength={80}
                 value={opReturnMessage}
                 onChange={(e) => setOpReturnMessage(e.target.value)}
-                placeholder="e.g. entropy-roulette-btcpragueconf2025"
-                className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-neon"
+                placeholder="e.g. entropy-roulette-btcprague-2025"
+                className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
               />
               <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
-                <span>Written on-chain in Tx 1 by the presenter&apos;s wallet</span>
-                <span>{opReturnMessage.length}/80</span>
+                <span>Embedded permanently on-chain in Tx 1. Required.</span>
+                <span className={opReturnMessage.length > 80 ? "text-glitch" : ""}>
+                  {opReturnMessage.length}/80
+                </span>
               </div>
+            </div>
+
+            {/* Network info */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center justify-between p-3 bg-muted/20 rounded-lg">
+                <span className="font-mono text-xs text-muted-foreground">Fee rate</span>
+                <span className="font-mono text-sm text-neon">{feeRate} sat/vB</span>
+              </div>
+              {blockHeight && (
+                <div className="flex items-center justify-between p-3 bg-muted/20 rounded-lg">
+                  <span className="font-mono text-xs text-muted-foreground">Block</span>
+                  <span className="font-mono text-sm text-neon">{blockHeight.toLocaleString()}</span>
+                </div>
+              )}
             </div>
 
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing || !walletState?.signature}
+              disabled={isInitializing || !walletState?.signature || !opReturnValid}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
               {isInitializing ? "INITIALIZING..." : "START GAME"}
             </Button>
 
-            {error && (
-              <p className="font-mono text-xs text-glitch text-center">
-                {error}
+            {!opReturnValid && opReturnMessage.length === 0 && (
+              <p className="font-mono text-[10px] text-muted-foreground text-center">
+                Enter an OP_RETURN message to continue
               </p>
+            )}
+
+            {error && (
+              <p className="font-mono text-xs text-glitch text-center">{error}</p>
             )}
           </div>
         </motion.div>
@@ -426,533 +398,171 @@ export default function PresenterPage() {
     );
   }
 
-  // Educational + Join screen
-  if (mode === "educate") {
-    return (
-      <div className="min-h-screen bg-background p-8">
-        {/* Header */}
-        <header className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <h1 className="font-mono text-2xl text-neon">ENTROPY ROULETTE</h1>
-            {session && (
-              <span className="font-mono text-lg text-muted-foreground">
-                GAME: {session.id.toUpperCase()}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              onClick={() => setMode("game")}
-              variant="outline"
-              size="sm"
-              className="font-mono"
-            >
-              GAME VIEW
-            </Button>
-            {session?.phase === "IDLE" && (
-              <Button
-                onClick={handleOpenLobby}
-                className="bg-neon text-background hover:bg-neon/80 font-mono"
-                size="sm"
-              >
-                OPEN LOBBY
-              </Button>
-            )}
-            {session?.phase === "LOBBY_OPEN" && (
-              <Button
-                onClick={handleCloseLobby}
-                className="bg-glitch text-white hover:bg-glitch/80 font-mono"
-                size="sm"
-              >
-                CLOSE LOBBY
-                {session.players.length > 0 && (
-                  <span className="ml-2 bg-white/20 rounded px-1 text-xs">
-                    {session.players.length}
-                  </span>
-                )}
-              </Button>
-            )}
-            {session?.phase === "LOBBY_CLOSED" && (
-              <Button
-                onClick={handleCollectSignatures}
-                className="bg-memphis text-background hover:bg-memphis/80 font-mono"
-                size="sm"
-              >
-                BUILD PSBT
-              </Button>
-            )}
-          </div>
-        </header>
-
-        <div className="grid grid-cols-12 gap-8">
-          {/* Left: QR Code and Join Info */}
-          <div className="col-span-5 flex flex-col items-center">
-            <div className="bg-card border border-border rounded-lg p-8 w-full">
-              <h2 className="font-mono text-xl text-neon text-center mb-6">
-                SCAN TO JOIN
-              </h2>
-
-              <div className="bg-white rounded-lg p-6 mx-auto w-fit mb-6">
-                <QRCodeSVG value={getJoinUrl()} size={280} level="M" />
-              </div>
-
-              <div className="text-center space-y-4">
-                <p className="font-mono text-sm text-muted-foreground">
-                  Point your phone camera at this QR code
-                </p>
-
-                <div className="p-4 bg-muted/20 rounded-lg">
-                  <div className="font-mono text-xs text-muted-foreground mb-1">
-                    OR VISIT
-                  </div>
-                  <div className="font-mono text-sm text-neon break-all">
-                    {typeof window !== "undefined"
-                      ? `${window.location.origin}/player?game=${session?.id}`
-                      : ""}
-                  </div>
-                </div>
-
-                {session && (
-                  <div className="p-4 bg-neon/10 border border-neon/30 rounded-lg">
-                    <div className="font-mono text-3xl text-neon mb-1">
-                      {session.players.length}
-                    </div>
-                    <div className="font-mono text-xs text-muted-foreground">
-                      {session.players.length === 1 ? "PLAYER" : "PLAYERS"}{" "}
-                      JOINED
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Supported wallets */}
-            <div className="bg-card border border-border rounded-lg p-6 w-full mt-6">
-              <h3 className="font-mono text-sm text-neon mb-4">
-                SUPPORTED WALLETS
-              </h3>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { name: "Xverse", note: "Extension / mobile" },
-                  { name: "Unisat", note: "Extension" },
-                  { name: "Leather", note: "Extension" },
-                  { name: "Alby", note: "Extension / Hub" },
-                  { name: "Sparrow", note: "Desktop — PSBT file" },
-                  { name: "BlueWallet", note: "Mobile — PSBT file" },
-                ].map((w) => (
-                  <div key={w.name} className="p-2 bg-muted/20 rounded-lg">
-                    <div className="font-mono text-xs text-neon">{w.name}</div>
-                    <div className="font-mono text-[10px] text-muted-foreground">{w.note}</div>
-                  </div>
-                ))}
-              </div>
-              <p className="font-mono text-[10px] text-muted-foreground mt-3 leading-relaxed">
-                Extension wallets sign directly in the browser. Sparrow and BlueWallet
-                players download the PSBT file, sign it, and hand the signed file back.
-              </p>
-            </div>
-          </div>
-
-          {/* Right: Educational content */}
-          <div className="col-span-7">
-            <Tabs defaultValue="learn" className="w-full">
-              <TabsList className="w-full grid grid-cols-4 mb-6">
-                <TabsTrigger value="learn" className="font-mono text-xs">
-                  LEARN
-                </TabsTrigger>
-                <TabsTrigger value="how" className="font-mono text-xs">
-                  HOW IT WORKS
-                </TabsTrigger>
-                <TabsTrigger value="players" className="font-mono text-xs">
-                  PLAYERS
-                </TabsTrigger>
-                <TabsTrigger value="timing" className="font-mono text-xs">
-                  TIMING
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="learn">
-                <EducationalSlides
-                  variant="presenter"
-                  showControls={true}
-                />
-              </TabsContent>
-
-              <TabsContent value="how">
-                <div className="bg-card border border-border rounded-lg p-6 space-y-6">
-                  <div>
-                    <h3 className="font-mono text-lg text-neon mb-3">
-                      The Two-Transaction Flow
-                    </h3>
-                    <p className="font-mono text-sm text-muted-foreground leading-relaxed">
-                      Tx 1: All player inputs → single output to presenter's escrow.
-                      The TXID entropy determines the winner. Tx 2: Presenter pays
-                      the winner from escrow. No circular dependency.
-                    </p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-mono text-lg text-neon mb-3">
-                      The Game Flow
-                    </h3>
-                    <div className="space-y-3">
-                      {[
-                        {
-                          step: 1,
-                          title: "Presenter connects wallet",
-                          desc: "Xverse connects and signs the game creation message. This sets the escrow address.",
-                        },
-                        {
-                          step: 2,
-                          title: "Lobby opens — players scan & join",
-                          desc: "Each player scans the QR, selects their wallet (Xverse, Unisat, Leather, Alby, Sparrow, or BlueWallet), and registers with their Bitcoin address.",
-                        },
-                        {
-                          step: 3,
-                          title: "Lobby closes — PSBT is built",
-                          desc: "All player UTXOs are assembled into one unsigned PSBT. One output: the escrow address.",
-                        },
-                        {
-                          step: 4,
-                          title: "Players sign their input",
-                          desc: "Extension wallets pop a signing dialog. Sparrow and BlueWallet users download the PSBT file, sign offline, and return it to the presenter.",
-                        },
-                        {
-                          step: 5,
-                          title: "Finalize & broadcast Tx 1",
-                          desc: "All partial signatures are combined. The PSBT is finalized and the raw transaction is broadcast to the Bitcoin network.",
-                        },
-                        {
-                          step: 6,
-                          title: "Winner from TXID entropy",
-                          desc: "Last byte of the confirmed TXID modulo player count. Verifiable by anyone on any block explorer.",
-                        },
-                        {
-                          step: 7,
-                          title: "Payout — Tx 2",
-                          desc: "Presenter signs and broadcasts Tx 2 from their wallet: escrow UTXO → winner's address.",
-                        },
-                      ].map((item) => (
-                        <div
-                          key={item.step}
-                          className="flex items-start gap-3 p-3 bg-muted/20 rounded-lg"
-                        >
-                          <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm flex-shrink-0">
-                            {item.step}
-                          </div>
-                          <div>
-                            <div className="font-mono text-sm text-foreground">
-                              {item.title}
-                            </div>
-                            <div className="font-mono text-xs text-muted-foreground">
-                              {item.desc}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="font-mono text-lg text-neon mb-3">
-                      Winner Selection Formula
-                    </h3>
-                    <div className="p-4 bg-muted/30 rounded-lg font-mono text-sm">
-                      <code>
-                        winner = TXID_last_byte % player_count
-                      </code>
-                    </div>
-                    <p className="font-mono text-xs text-muted-foreground mt-2">
-                      The last byte of the transaction ID (determined by
-                      Bitcoin&apos;s mining process) modulo the number of players
-                      determines the winner. This is verifiable and impossible
-                      to predict or manipulate.
-                    </p>
-                  </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="players">
-                <div className="bg-card border border-border rounded-lg p-6">
-                  <h3 className="font-mono text-lg text-neon mb-4">
-                    JOINED PLAYERS
-                  </h3>
-                  {session?.players && session.players.length > 0 ? (
-                    <div className="space-y-3">
-                      {session.players.map((player, index) => (
-                        <motion.div
-                          key={player.pubkey}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.1 }}
-                          className="flex items-center justify-between p-4 bg-muted/20 rounded-lg"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm">
-                              {index + 1}
-                            </div>
-                            <div>
-                              <div className="font-mono text-sm">
-                                {player.displayName}
-                              </div>
-                              <div className="font-mono text-xs text-muted-foreground">
-                                {player.receivingAddress
-                                  ? player.receivingAddress.slice(0, 16) + "..."
-                                  : player.pubkey.slice(0, 12) + "..."}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-mono text-sm text-memphis">
-                              {formatSats(player.amount)}
-                            </div>
-                            <div className="font-mono text-xs text-muted-foreground">
-                              {player.signedPsbt ? (
-                                <span className="text-neon">SIGNED</span>
-                              ) : (
-                                "PENDING"
-                              )}
-                            </div>
-                          </div>
-                        </motion.div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-12">
-                      <div className="font-mono text-2xl text-muted-foreground mb-2">
-                        WAITING FOR PLAYERS
-                      </div>
-                      <p className="font-mono text-sm text-muted-foreground">
-                        Players should scan the QR code to join
-                      </p>
-                    </div>
-                  )}
-
-                  {session && session.players.length > 0 && (
-                    <div className="mt-6 p-4 bg-memphis/10 border border-memphis/30 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="font-mono text-sm">TOTAL POT</span>
-                        <span className="font-mono text-xl text-memphis">
-                          {formatSats(totalPot)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* TIMING tab */}
-              <TabsContent value="timing">
-                <div className="bg-card border border-border rounded-lg p-6 space-y-6">
-                  <div>
-                    <h3 className="font-mono text-lg text-neon mb-1">
-                      Session Timing Guide
-                    </h3>
-                    <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                      A typical session runs 20–45 minutes depending on audience size and
-                      connectivity. Use these ranges as a guide — you control the pace.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    {[
-                      {
-                        phase: "Setup & intro",
-                        range: "2–5 min",
-                        note: "Connect wallet, start game, open lobby, explain the rules to the room.",
-                        color: "text-neon",
-                      },
-                      {
-                        phase: "Lobby open — players scan & join",
-                        range: "5–15 min",
-                        note: "Scan QR, open wallet, connect, select UTXO, sign. More players or poor connectivity → more time. Don't rush this.",
-                        color: "text-neon",
-                      },
-                      {
-                        phase: "Close lobby & build PSBT",
-                        range: "1–2 min",
-                        note: "Close lobby once everyone is in. Click BUILD PSBT — the server assembles all inputs.",
-                        color: "text-neon",
-                      },
-                      {
-                        phase: "Players sign their inputs",
-                        range: "2–5 min",
-                        note: "Extension wallets pop a signing dialog. Sparrow/BlueWallet users need extra time for file download + import.",
-                        color: "text-neon",
-                      },
-                      {
-                        phase: "Finalize & broadcast Tx 1",
-                        range: "< 1 min",
-                        note: "Combine all signatures, finalize, broadcast to mainnet.",
-                        color: "text-memphis",
-                      },
-                      {
-                        phase: "Confirmation wait",
-                        range: "10–60 min",
-                        note: "Depends on mempool congestion and the fee rate used. First confirmation triggers winner selection.",
-                        color: "text-memphis",
-                      },
-                      {
-                        phase: "Winner revealed & Tx 2 payout",
-                        range: "2–5 min",
-                        note: "Entropy formula announced. Presenter builds and signs Tx 2 from their wallet to the winner&apos;s address.",
-                        color: "text-memphis",
-                      },
-                    ].map((row) => (
-                      <div
-                        key={row.phase}
-                        className="flex gap-3 p-3 bg-muted/20 rounded-lg"
-                      >
-                        <div className="w-20 flex-shrink-0">
-                          <span className={`font-mono text-xs font-semibold ${row.color}`}>
-                            {row.range}
-                          </span>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="font-mono text-xs text-foreground mb-0.5">
-                            {row.phase}
-                          </div>
-                          <div className="font-mono text-[10px] text-muted-foreground leading-relaxed">
-                            {row.note}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
-                    <p className="font-mono text-xs text-neon">
-                      Confirmation time note
-                    </p>
-                    <p className="font-mono text-xs text-muted-foreground mt-1 leading-relaxed">
-                      If you need a guaranteed slot in the next block, use a higher fee
-                      rate (fastestFee). For workshops where waiting is fine, halfHourFee
-                      or hourFee saves money. Current rate shown in the header.
-                    </p>
-                  </div>
-                </div>
-              </TabsContent>
-            </Tabs>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Main game view (PSBT Inspector focused)
+  // ---------------------------------------------------------------------------
+  // GAME VIEW — single mode after setup
+  // ---------------------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-background p-4">
+    <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between mb-4 pb-4 border-b border-border">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-4">
-          <h1 className="font-mono text-xl text-neon">ENTROPY ROULETTE</h1>
+          <h1 className="font-mono text-lg text-neon">ENTROPY ROULETTE</h1>
           {session && (
             <span className="font-mono text-sm text-muted-foreground">
-              GAME: {session.id.toUpperCase()}
+              {session.id.toUpperCase()}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-6">
-          <Button
-            onClick={() => setMode("educate")}
-            variant="outline"
-            size="sm"
-            className="font-mono"
-          >
-            SHOW QR
-          </Button>
+        <div className="flex items-center gap-4">
           {blockHeight && (
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-muted-foreground">
-                BLOCK
-              </span>
-              <span className="font-mono text-sm text-neon">
-                {blockHeight.toLocaleString()}
-              </span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-xs text-muted-foreground">BLOCK</span>
+              <span className="font-mono text-sm text-neon">{blockHeight.toLocaleString()}</span>
             </div>
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <span className="font-mono text-xs text-muted-foreground">FEE</span>
             <span className="font-mono text-sm text-neon">{feeRate} sat/vB</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <span className="font-mono text-xs text-muted-foreground">POT</span>
-            <span className="font-mono text-sm text-memphis">
-              {formatSats(totalPot)}
-            </span>
+            <span className="font-mono text-sm text-memphis">{formatSats(totalPot)}</span>
           </div>
+          {/* Phase + lobby actions inline */}
+          {session?.phase === "IDLE" && (
+            <Button onClick={handleOpenLobby} size="sm" className="bg-neon text-background hover:bg-neon/80 font-mono">
+              OPEN LOBBY
+            </Button>
+          )}
+          {session?.phase === "LOBBY_OPEN" && (
+            <Button onClick={handleCloseLobby} size="sm" className="bg-glitch text-white hover:bg-glitch/80 font-mono">
+              CLOSE LOBBY
+              {session.players.length > 0 && (
+                <span className="ml-2 bg-white/20 rounded px-1 text-xs">{session.players.length}</span>
+              )}
+            </Button>
+          )}
+          {session?.phase === "LOBBY_CLOSED" && (
+            <Button onClick={handleCollectSignatures} size="sm" className="bg-memphis text-background hover:bg-memphis/80 font-mono">
+              BUILD PSBT
+            </Button>
+          )}
         </div>
       </header>
 
-      {/* Main content */}
-      <div className="grid grid-cols-12 gap-4 h-[calc(100vh-120px)]">
-        {/* Left: QR Code panel (smaller) */}
-        <div className="col-span-2">
-          <div className="bg-card border border-border rounded-lg p-4">
-            <div className="bg-white rounded-lg p-2 mb-2">
-              <QRCodeSVG value={getJoinUrl()} size={120} level="M" />
+      {/* Main 3-column layout */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* LEFT COLUMN: QR + education panel */}
+        <div className="w-72 flex-shrink-0 flex flex-col border-r border-border overflow-y-auto">
+
+          {/* QR block — prominent */}
+          <div className="p-4 border-b border-border">
+            <div className="bg-white rounded-lg p-3 mb-3">
+              <QRCodeSVG value={getJoinUrl()} size={220} level="M" className="w-full h-auto" />
             </div>
-            <div className="font-mono text-xs text-center text-muted-foreground">
-              Scan to join
-            </div>
-            {session && (
-              <div className="mt-2 text-center">
-                <div className="font-mono text-lg text-neon">
-                  {session.players.length}
+            <div className="text-center space-y-2">
+              <p className="font-mono text-xs text-muted-foreground">
+                Scan to join the game
+              </p>
+              {session && (
+                <div className="p-2 bg-neon/10 border border-neon/30 rounded-lg">
+                  <div className="font-mono text-3xl text-neon leading-none">
+                    {session.players.length}
+                  </div>
+                  <div className="font-mono text-xs text-muted-foreground mt-0.5">
+                    {session.players.length === 1 ? "player" : "players"} joined
+                  </div>
                 </div>
-                <div className="font-mono text-xs text-muted-foreground">
-                  players
-                </div>
+              )}
+              <div className="font-mono text-[10px] text-muted-foreground break-all leading-relaxed">
+                {typeof window !== "undefined"
+                  ? `${window.location.origin}/player?game=${session?.id}`
+                  : ""}
               </div>
-            )}
+            </div>
+          </div>
+
+          {/* OP_RETURN badge */}
+          {opReturnMessage && (
+            <div className="px-4 py-3 border-b border-border">
+              <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
+                OP_RETURN (on-chain)
+              </div>
+              <div className="font-mono text-xs text-neon break-all leading-relaxed">
+                {opReturnMessage.trim()}
+              </div>
+            </div>
+          )}
+
+          {/* Education accordion */}
+          <div className="flex-1">
+            <button
+              className="w-full flex items-center justify-between px-4 py-3 border-b border-border font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setEducationOpen((v) => !v)}
+            >
+              <span>PRESENTATION SLIDES</span>
+              {educationOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+
+            <AnimatePresence initial={false}>
+              {educationOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="p-3">
+                    <EducationalSlides variant="presenter" showControls={true} />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Supported wallets */}
+          <div className="p-4 border-t border-border mt-auto">
+            <div className="font-mono text-[10px] text-muted-foreground uppercase mb-2">
+              Supported wallets
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {["Xverse", "Unisat", "Leather", "Alby", "Sparrow", "BlueWallet"].map((w) => (
+                <div key={w} className="font-mono text-[10px] text-neon px-1.5 py-1 bg-neon/5 rounded text-center">
+                  {w}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Center: PSBT Inspector + Builder */}
-        <div className="col-span-7 bg-background/50 border border-border rounded-lg overflow-auto">
-          <Tabs defaultValue={currentPsbt ? "inspect" : "build"} className="h-full flex flex-col">
-            <TabsList className="m-3 grid grid-cols-2">
+        {/* CENTER COLUMN: PSBT builder + inspector */}
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <Tabs defaultValue={currentPsbt ? "inspect" : "build"} className="flex flex-col h-full">
+            <TabsList className="mx-3 mt-3 grid grid-cols-2 flex-shrink-0">
               <TabsTrigger value="build" className="font-mono text-xs">BUILD PSBT</TabsTrigger>
               <TabsTrigger value="inspect" className="font-mono text-xs">INSPECT</TabsTrigger>
             </TabsList>
 
             <TabsContent value="build" className="flex-1 overflow-auto p-3">
               {session && walletState?.address ? (
-                <>
-                  {/* OP_RETURN — presenter-only, written into Tx 1 */}
-                  <div className="mb-3 space-y-1">
-                    <label className="font-mono text-[10px] text-muted-foreground uppercase">
-                      OP_RETURN message
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={80}
-                      value={opReturnMessage}
-                      onChange={(e) => setOpReturnMessage(e.target.value)}
-                      placeholder="optional — written on-chain by your wallet"
-                      className="w-full px-2 py-1.5 bg-muted/20 border border-border rounded font-mono text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-neon"
-                    />
-                    <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
-                      <span>Max 80 bytes</span>
-                      <span>{opReturnMessage.length}/80</span>
-                    </div>
-                  </div>
-                  <PsbtBuilder
-                    players={session.players}
-                    presenterAddress={walletState.address}
-                    feeRate={feeRate}
-                    onPsbtBuilt={(psbt) => {
-                      setCurrentPsbt(psbt);
-                      addLog("info", "PSBT built via builder — share with players for signing");
-                    }}
-                    onFinalized={(rawTx, finalTxid) => {
-                      setTxid(finalTxid);
-                      setRawTxCache(rawTx);
-                      addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
-                      longPulse();
-                    }}
-                  />
-                </>
+                <PsbtBuilder
+                  players={session.players}
+                  presenterAddress={walletState.address}
+                  feeRate={feeRate}
+                  opReturnText={opReturnMessage.trim()}
+                  onPsbtBuilt={(psbt) => {
+                    setCurrentPsbt(psbt);
+                    addLog("info", "PSBT built — publishing to players for signing");
+                  }}
+                  onFinalized={(rawTx, finalTxid) => {
+                    setTxid(finalTxid);
+                    setRawTxCache(rawTx);
+                    addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+                    longPulse();
+                  }}
+                />
               ) : (
                 <div className="flex items-center justify-center h-40">
                   <div className="font-mono text-sm text-muted-foreground">
@@ -972,10 +582,8 @@ export default function PresenterPage() {
                 />
               ) : (
                 <div className="flex items-center justify-center h-40">
-                  <div className="text-center">
-                    <div className="font-mono text-sm text-muted-foreground mb-2">
-                      PSBT will appear here after building
-                    </div>
+                  <div className="font-mono text-sm text-muted-foreground">
+                    PSBT will appear here after building
                   </div>
                 </div>
               )}
@@ -983,49 +591,133 @@ export default function PresenterPage() {
           </Tabs>
         </div>
 
-        {/* Right: Control panel and logs */}
-        <div className="col-span-3 flex flex-col gap-4">
-          {session && (
-            <ControlPanel
-              phase={session.phase}
-              playerCount={session.players.length}
-              signedCount={session.players.filter((p) => p.signedPsbt).length}
-              onOpenLobby={handleOpenLobby}
-              onCloseLobby={handleCloseLobby}
-              onCollectSignatures={handleCollectSignatures}
-              onFinalize={handleFinalize}
-              onBroadcast={handleBroadcast}
-              isLoading={isInitializing}
-            />
-          )}
+        {/* RIGHT COLUMN: PLAYERS, control panel, logs */}
+        <div className="w-72 flex-shrink-0 flex flex-col border-l border-border overflow-hidden">
 
-          <div className="flex-1 min-h-0">
+          {/* Players list */}
+          <div className="flex-1 overflow-y-auto">
+            <Tabs defaultValue="players">
+              <TabsList className="w-full grid grid-cols-2 m-3 w-[calc(100%-24px)]">
+                <TabsTrigger value="players" className="font-mono text-xs">PLAYERS</TabsTrigger>
+                <TabsTrigger value="timing" className="font-mono text-xs">TIMING</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="players" className="px-3 pb-3">
+                {session?.players && session.players.length > 0 ? (
+                  <div className="space-y-2">
+                    {session.players.map((player, index) => (
+                      <motion.div
+                        key={player.pubkey}
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                        className="flex items-center justify-between p-3 bg-muted/20 rounded-lg"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-xs">
+                            {index + 1}
+                          </div>
+                          <div>
+                            <div className="font-mono text-xs">{player.displayName}</div>
+                            <div className="font-mono text-[10px] text-muted-foreground">
+                              {player.receivingAddress
+                                ? player.receivingAddress.slice(0, 12) + "..."
+                                : player.pubkey.slice(0, 10) + "..."}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-mono text-xs text-memphis">{formatSats(player.amount)}</div>
+                          <div className="font-mono text-[10px]">
+                            {player.signedPsbt ? (
+                              <span className="text-neon">SIGNED</span>
+                            ) : (
+                              <span className="text-muted-foreground">PENDING</span>
+                            )}
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                    <div className="p-3 bg-memphis/10 border border-memphis/30 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <span className="font-mono text-xs">TOTAL POT</span>
+                        <span className="font-mono text-base text-memphis">{formatSats(totalPot)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <div className="font-mono text-sm text-muted-foreground">Waiting for players</div>
+                    <div className="font-mono text-xs text-muted-foreground mt-1">
+                      {session?.phase === "IDLE" ? "Open the lobby first" : "Lobby is open"}
+                    </div>
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="timing" className="px-3 pb-3 space-y-2">
+                {[
+                  { phase: "Setup & intro", range: "2–5 min", note: "Connect wallet, set OP_RETURN, start game, open lobby." },
+                  { phase: "Lobby — players join", range: "5–15 min", note: "Scan QR, pick wallet, sign ownership message. More players = more time." },
+                  { phase: "Build PSBT", range: "1 min", note: "Close lobby, build PSBT with all inputs + OP_RETURN." },
+                  { phase: "Players sign", range: "2–5 min", note: "Extension wallets: in-browser. Sparrow/BlueWallet: file download." },
+                  { phase: "Finalize & broadcast Tx 1", range: "< 1 min", note: "Combine sigs, finalize, broadcast." },
+                  { phase: "Confirmation", range: "10–60 min", note: "Depends on fee rate and mempool." },
+                  { phase: "Payout Tx 2", range: "2–5 min", note: "Presenter signs Tx 2 → winner address." },
+                ].map((row) => (
+                  <div key={row.phase} className="flex gap-2 p-2 bg-muted/20 rounded">
+                    <div className="w-16 flex-shrink-0 font-mono text-[10px] text-neon pt-0.5">{row.range}</div>
+                    <div>
+                      <div className="font-mono text-[10px] text-foreground">{row.phase}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground leading-relaxed">{row.note}</div>
+                    </div>
+                  </div>
+                ))}
+              </TabsContent>
+            </Tabs>
+          </div>
+
+          {/* Control panel */}
+          <div className="border-t border-border p-3 flex-shrink-0">
+            {session && (
+              <ControlPanel
+                phase={session.phase}
+                playerCount={session.players.length}
+                signedCount={session.players.filter((p) => p.signedPsbt).length}
+                onOpenLobby={handleOpenLobby}
+                onCloseLobby={handleCloseLobby}
+                onCollectSignatures={handleCollectSignatures}
+                onFinalize={handleFinalize}
+                onBroadcast={handleBroadcast}
+                isLoading={isInitializing}
+              />
+            )}
+          </div>
+
+          {/* Live log */}
+          <div className="border-t border-border h-40 flex-shrink-0">
             <LiveLog entries={logs} />
           </div>
 
-          {/* TXID display */}
+          {/* TXID displays */}
           <AnimatePresence>
             {txid && (
               <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="p-3 bg-neon/10 border border-neon/30 rounded-lg"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="border-t border-border p-3 flex-shrink-0"
               >
-                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
-                  Tx 1 (Escrow)
-                </div>
+                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">Tx 1 (Escrow)</div>
                 <div className="font-mono text-xs text-neon break-all">{txid}</div>
               </motion.div>
             )}
             {payoutTxid && (
               <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="p-3 bg-memphis/10 border border-memphis/30 rounded-lg"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="border-t border-border p-3 flex-shrink-0"
               >
-                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
-                  Tx 2 (Payout)
-                </div>
+                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">Tx 2 (Payout)</div>
                 <div className="font-mono text-xs text-memphis break-all">{payoutTxid}</div>
               </motion.div>
             )}

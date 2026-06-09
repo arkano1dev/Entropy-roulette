@@ -411,20 +411,41 @@ export function WalletSelector({
             {/* --- Extension wallets --- */}
             {isExtension && (
               <>
-                {!detectedWallets.has(selected) && wallet?.installUrl && (
-                  <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
-                    <p className="font-mono text-xs text-glitch mb-2">
-                      {wallet.name} not detected in this browser.
-                    </p>
-                    <a
-                      href={wallet.installUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 font-mono text-xs text-neon hover:underline"
-                    >
-                      Install {wallet.name}
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+                {!detectedWallets.has(selected) && (
+                  <div className="space-y-2">
+                    {/* Xverse mobile deep link — open this page inside the Xverse app browser */}
+                    {selected === "xverse" && (
+                      <a
+                        href={`https://connect.xverse.app/browser?url=${encodeURIComponent(
+                          typeof window !== "undefined" ? window.location.href : ""
+                        )}`}
+                        className="flex items-center justify-between w-full p-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 transition-colors"
+                      >
+                        <div>
+                          <div className="font-mono text-sm text-neon">Open in Xverse app</div>
+                          <div className="font-mono text-[10px] text-muted-foreground leading-relaxed mt-0.5">
+                            Tap here on your phone to open this page inside the Xverse mobile app and sign with your mobile wallet.
+                          </div>
+                        </div>
+                        <ExternalLink className="w-4 h-4 text-neon flex-shrink-0 ml-3" />
+                      </a>
+                    )}
+                    {wallet?.installUrl && (
+                      <div className="p-3 bg-muted/20 border border-border rounded-lg">
+                        <p className="font-mono text-xs text-muted-foreground mb-2">
+                          {wallet.name} extension not detected in this browser.
+                        </p>
+                        <a
+                          href={wallet.installUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-mono text-xs text-neon hover:underline"
+                        >
+                          Install {wallet.name} browser extension
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                    )}
                   </div>
                 )}
 

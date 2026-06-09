@@ -8,9 +8,8 @@
 //  - Presenter can combine all fragments, finalize, and broadcast
 
 import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import type { Player } from "@/lib/game/types";
 
@@ -18,6 +17,8 @@ interface PsbtBuilderProps {
   players: Player[];
   presenterAddress: string;
   feeRate: number;
+  /** OP_RETURN text set by the presenter at game creation — always embedded. */
+  opReturnText: string;
   onPsbtBuilt: (psbtBase64: string) => void;
   onFinalized: (rawTx: string, txid: string) => void;
 }
@@ -38,23 +39,16 @@ export function PsbtBuilder({
   players,
   presenterAddress,
   feeRate,
+  opReturnText,
   onPsbtBuilt,
   onFinalized,
 }: PsbtBuilderProps) {
-  const [opReturnText, setOpReturnText] = useState("");
-  const [opReturnEnabled, setOpReturnEnabled] = useState(false);
   const [buildState, setBuildState] = useState<BuildState | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<
     "build" | "inspect" | "finalize" | "broadcast"
   >("build");
-
-  const byteLen =
-    typeof TextEncoder !== "undefined"
-      ? new TextEncoder().encode(opReturnText).length
-      : opReturnText.length;
-  const opReturnTooLong = byteLen > 80;
 
   // --- Build the initial PSBT ---
   const handleBuild = useCallback(async () => {
@@ -69,8 +63,7 @@ export function PsbtBuilder({
           players: players.map((p) => ({ utxo: p.utxo })),
           escrowAddress: presenterAddress,
           feeRate,
-          opReturnData:
-            opReturnEnabled && opReturnText.trim() ? opReturnText.trim() : undefined,
+          opReturnData: opReturnText.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -106,7 +99,7 @@ export function PsbtBuilder({
     } finally {
       setIsBusy(false);
     }
-  }, [players, presenterAddress, feeRate, opReturnEnabled, opReturnText, onPsbtBuilt]);
+  }, [players, presenterAddress, feeRate, opReturnText, onPsbtBuilt]);
 
   // --- Finalize: combine available signed fragments, then extract raw tx ---
   const handleFinalize = useCallback(async () => {
@@ -167,55 +160,14 @@ export function PsbtBuilder({
           animate={{ opacity: 1, y: 0 }}
           className="space-y-4"
         >
-          {/* OP_RETURN editor */}
-          <div className="bg-muted/20 border border-border rounded-lg p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-sm text-neon">OP_RETURN DATA</span>
-              <button
-                type="button"
-                onClick={() => setOpReturnEnabled((v) => !v)}
-                className={`font-mono text-xs px-3 py-1 rounded border transition-colors ${
-                  opReturnEnabled
-                    ? "bg-neon/20 border-neon/50 text-neon"
-                    : "bg-muted/30 border-border text-muted-foreground"
-                }`}
-              >
-                {opReturnEnabled ? "ENABLED" : "DISABLED"}
-              </button>
+          {/* OP_RETURN — read-only, set at game creation */}
+          <div className="bg-neon/5 border border-neon/20 rounded-lg p-3">
+            <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
+              OP_RETURN (set at game creation)
             </div>
-
-            <AnimatePresence>
-              {opReturnEnabled && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="space-y-2 overflow-hidden"
-                >
-                  <Textarea
-                    value={opReturnText}
-                    onChange={(e) => setOpReturnText(e.target.value)}
-                    placeholder='Write anything: "ENTROPY ROULETTE 2025", JSON data, a hash, a message...'
-                    className="font-mono text-sm resize-none bg-background/60 border-border"
-                    rows={3}
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {byteLen}/80 bytes
-                    </span>
-                    {opReturnTooLong && (
-                      <span className="font-mono text-xs text-glitch">
-                        Too long — max 80 bytes
-                      </span>
-                    )}
-                  </div>
-                  <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                    Embedded permanently in the Bitcoin transaction. Can be any
-                    string — not restricted to BRC-20.
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <div className="font-mono text-xs text-neon break-all leading-relaxed">
+              {opReturnText || <span className="text-muted-foreground italic">none</span>}
+            </div>
           </div>
 
           {/* Player inputs summary */}
@@ -251,11 +203,7 @@ export function PsbtBuilder({
 
           <Button
             onClick={handleBuild}
-            disabled={
-              isBusy ||
-              playersWithUtxo.length === 0 ||
-              (opReturnEnabled && opReturnTooLong)
-            }
+            disabled={isBusy || playersWithUtxo.length === 0}
             className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
             size="lg"
           >
