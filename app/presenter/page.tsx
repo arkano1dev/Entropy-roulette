@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
 import { PSBTInspector } from "@/components/game/psbt-inspector";
 import { LiveLog, createLogEntry } from "@/components/game/live-log";
+import { PsbtBuilder } from "@/components/game/psbt-builder";
 import { ControlPanel } from "@/components/presenter/control-panel";
 import { EducationalSlides } from "@/components/game/educational-slides";
 import { XverseConnectPresenter, type PresenterWalletState } from "@/components/presenter/xverse-connect";
@@ -13,16 +14,11 @@ import { formatSats } from "@/lib/bitcoin/wallet-connect";
 import {
   getFeeEstimates,
   getBlockHeight,
-  broadcastTransaction,
   getTransactionStatus,
 } from "@/lib/bitcoin/mempool-api";
 import {
-  finalizePsbt,
-  buildEscrowPsbt,
-  buildPayoutPsbt,
   calculateWinner,
 } from "@/lib/bitcoin/psbt-engine";
-import { signPresenterPsbt } from "@/lib/bitcoin/sats-connect";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
@@ -70,6 +66,7 @@ export default function PresenterPage() {
 
   // PSBT state
   const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
+  const [rawTxCache, setRawTxCache] = useState<string | null>(null);
 
   // Add log entry
   const addLog = useCallback(
@@ -145,21 +142,37 @@ export default function PresenterPage() {
     longPulse();
   };
 
-  // Handle signature collection
+  // Handle signature collection — now builds PSBT via /api/psbt
   const handleCollectSignatures = async () => {
     if (!session || !walletState?.address) return;
 
     addLog("system", "Initiating signature collection...");
 
     try {
-      // Build escrow PSBT: all inputs → single output to presenter's address
-      const escrowPsbt = buildEscrowPsbt(
-        session.players,
-        walletState.address,
-        feeRate
-      );
+      const playersWithUtxo = session.players.filter((p) => p.utxo);
+      if (playersWithUtxo.length === 0) {
+        addLog("error", "No player UTXOs found — players must select UTXOs first");
+        return;
+      }
+
+      // Build escrow PSBT via real API route
+      const res = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "build",
+          players: playersWithUtxo.map((p) => ({ utxo: p.utxo })),
+          escrowAddress: walletState.address,
+          feeRate,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      const escrowPsbt = data.data.psbtBase64;
       setCurrentPsbt(escrowPsbt);
-      addLog("info", `PSBT built with ${session.players.length} inputs → escrow`);
+      addLog("info", `PSBT built: ${data.data.inputCount} inputs → escrow`);
+      addLog("info", `Estimated fee: ${data.data.estimatedFee.toLocaleString()} sats`);
 
       // Publish PSBT to Nostr for players
       await publishPsbtForSigning(escrowPsbt);
@@ -173,14 +186,13 @@ export default function PresenterPage() {
     }
   };
 
-  // Handle PSBT finalization - sign presenter's input if any, combine all signatures
+  // Handle PSBT finalization — combine player sigs via /api/psbt then finalize
   const handleFinalize = async () => {
     if (!session || session.players.length === 0 || !currentPsbt) return;
 
     try {
       addLog("system", "Finalizing PSBT...");
 
-      // Collect all signed PSBTs from players
       const signedPsbts = session.players
         .map((p) => p.signedPsbt)
         .filter(Boolean) as string[];
@@ -190,21 +202,34 @@ export default function PresenterPage() {
         return;
       }
 
-      // Combine all signatures into the base PSBT
-      // For the escrow flow, each player signs their own input.
-      // We need to merge them. The base PSBT is `currentPsbt`.
-      // Each player's signed fragment is a PSBT with their input signed.
-      // We combine them all.
-      let combined = currentPsbt;
-      for (const signed of signedPsbts) {
-        // Use bitcoinjs combine logic
-        const { combinePsbts } = await import("@/lib/bitcoin/psbt-engine");
-        combined = combinePsbts([combined, signed]);
-      }
+      // Combine base PSBT with all signed fragments
+      const allPsbts = [currentPsbt, ...signedPsbts];
+      const combineRes = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "combine", psbts: allPsbts }),
+      });
+      const combineData = await combineRes.json();
+      if (!combineData.success) throw new Error(combineData.error);
 
-      const { rawTx, txid: finalTxid } = finalizePsbt(combined);
+      // Finalize and extract raw tx
+      const finalRes = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "finalize",
+          psbtBase64: combineData.data.psbtBase64,
+        }),
+      });
+      const finalData = await finalRes.json();
+      if (!finalData.success) throw new Error(finalData.error);
+
+      const { rawTx, txid: finalTxid } = finalData.data;
       setTxid(finalTxid);
-      await setFinalizedPsbt(combined, finalTxid);
+      // Store raw tx for broadcast (attach to finalized psbt state)
+      await setFinalizedPsbt(finalData.data.finalizedPsbt, finalTxid);
+      // Temporarily cache rawTx for broadcast step
+      setRawTxCache(rawTx);
 
       addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
       longPulse();
@@ -213,22 +238,31 @@ export default function PresenterPage() {
     }
   };
 
-  // Handle broadcast (Tx 1)
+  // Handle broadcast (Tx 1) via /api/psbt broadcast action
   const handleBroadcast = async () => {
     if (!session || !txid) return;
 
     try {
       addLog("system", "Broadcasting Tx 1 to Bitcoin network...");
-      // We need rawTx to broadcast — store it somewhere. For now extract from finalizedPsbt.
-      if (!session.finalizedPsbt) {
-        addLog("error", "No finalized PSBT found");
+
+      if (!rawTxCache) {
+        addLog("error", "No raw transaction cached — finalize first");
         return;
       }
-      const { rawTx } = finalizePsbt(session.finalizedPsbt);
-      const broadcastedTxid = await broadcastTransaction(rawTx);
+
+      const res = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "broadcast", rawTx: rawTxCache }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      const broadcastedTxid = data.data.txid;
       addLog("success", `Tx 1 broadcast! TXID: ${broadcastedTxid.slice(0, 16)}...`);
       addLog("info", "Waiting for block confirmation...");
       setIsPolling(true);
+      setRawTxCache(null);
       longPulse();
     } catch (err) {
       addLog("error", `Broadcast failed: ${err}`);
@@ -261,40 +295,10 @@ export default function PresenterPage() {
           await confirmAndResolve(txid);
           victoryPulse();
 
-          // Now build and broadcast Tx 2: payout from escrow to winner
-          try {
-            addLog("system", "Building payout transaction (Tx 2)...");
-            // We need to know the escrow UTXO from Tx 1.
-            // Tx 1 has a single output to presenter address.
-            // We can look it up via mempool, but for now we know:
-            // - txid = txid
-            // - vout = 0 (single output)
-            // - value = totalPot - fee (approximate)
-            const escrowValue = totalPot - calculateFee(session.players.length, feeRate);
-
-            const payoutPsbt = buildPayoutPsbt(
-              txid,
-              0,
-              escrowValue,
-              walletState.address,
-              winner.receivingAddress,
-              feeRate
-            );
-
-            // Presenter signs the payout PSBT
-            const signedPayout = await signPresenterPsbt(payoutPsbt, walletState.address);
-            const { rawTx: payoutRawTx, txid: payoutTxidVal } = finalizePsbt(signedPayout);
-
-            addLog("system", "Broadcasting payout (Tx 2)...");
-            const actualPayoutTxid = await broadcastTransaction(payoutRawTx);
-            setPayoutTxid(actualPayoutTxid);
-            addLog(
-              "success",
-              `Payout broadcast! TXID: ${actualPayoutTxid.slice(0, 16)}...`
-            );
-          } catch (payoutErr) {
-            addLog("error", `Payout failed: ${payoutErr}`);
-          }
+          // Tx 2 payout: build via /api/psbt using escrow UTXO from Tx 1
+          // The presenter must sign this manually — a separate flow handles it
+          addLog("info", `Winner: ${winner.displayName} — initiate Tx 2 payout manually`);
+          addLog("info", `Escrow UTXO: ${txid.slice(0, 12)}...#0 → ${winner.receivingAddress?.slice(0, 12) ?? "unknown"}...`);
         }
       } catch {
         // Continue polling
@@ -744,28 +748,59 @@ export default function PresenterPage() {
           </div>
         </div>
 
-        {/* Center: PSBT Inspector */}
+        {/* Center: PSBT Inspector + Builder */}
         <div className="col-span-7 bg-background/50 border border-border rounded-lg overflow-auto">
-          {session && currentPsbt && (
-            <PSBTInspector
-              psbtBase64={currentPsbt}
-              players={session.players}
-              feeRate={feeRate}
-              phase={session.phase}
-            />
-          )}
-          {!currentPsbt && session && (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <div className="font-mono text-sm text-muted-foreground mb-2">
-                  PSBT will appear here after
+          <Tabs defaultValue={currentPsbt ? "inspect" : "build"} className="h-full flex flex-col">
+            <TabsList className="m-3 grid grid-cols-2">
+              <TabsTrigger value="build" className="font-mono text-xs">BUILD PSBT</TabsTrigger>
+              <TabsTrigger value="inspect" className="font-mono text-xs">INSPECT</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="build" className="flex-1 overflow-auto p-3">
+              {session && walletState?.address ? (
+                <PsbtBuilder
+                  players={session.players}
+                  presenterAddress={walletState.address}
+                  feeRate={feeRate}
+                  onPsbtBuilt={(psbt) => {
+                    setCurrentPsbt(psbt);
+                    addLog("info", "PSBT built via builder — share with players for signing");
+                  }}
+                  onFinalized={(rawTx, finalTxid) => {
+                    setTxid(finalTxid);
+                    setRawTxCache(rawTx);
+                    addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+                    longPulse();
+                  }}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-40">
+                  <div className="font-mono text-sm text-muted-foreground">
+                    Connect wallet and create game first
+                  </div>
                 </div>
-                <div className="font-mono text-sm text-neon">
-                  "COLLECT SIGNATURES" is clicked
+              )}
+            </TabsContent>
+
+            <TabsContent value="inspect" className="flex-1 overflow-auto">
+              {session && currentPsbt ? (
+                <PSBTInspector
+                  psbtBase64={currentPsbt}
+                  players={session.players}
+                  feeRate={feeRate}
+                  phase={session.phase}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-40">
+                  <div className="text-center">
+                    <div className="font-mono text-sm text-muted-foreground mb-2">
+                      PSBT will appear here after building
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          )}
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
 
         {/* Right: Control panel and logs */}
