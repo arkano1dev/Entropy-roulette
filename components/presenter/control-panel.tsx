@@ -80,7 +80,7 @@ export function ControlPanel({
           <>
             <Button
               onClick={onCloseLobby}
-              disabled={isLoading || playerCount === 0}
+              disabled={isLoading}
               className="w-full bg-glitch text-white hover:bg-glitch/80 font-mono"
               size="lg"
             >
@@ -88,8 +88,8 @@ export function ControlPanel({
             </Button>
             <p className="font-mono text-xs text-center text-muted-foreground">
               {playerCount === 0
-                ? "Waiting for players..."
-                : `${playerCount} player(s) ready`}
+                ? "Lobby open — waiting for players"
+                : `${playerCount} player${playerCount === 1 ? "" : "s"} joined`}
             </p>
           </>
         )}
