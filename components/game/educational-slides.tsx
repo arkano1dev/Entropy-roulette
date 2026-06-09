@@ -14,141 +14,168 @@ interface EducationalSlide {
 
 const PSBT_EDUCATIONAL_SLIDES: EducationalSlide[] = [
   {
-    id: "what-is-psbt",
-    title: "What is a PSBT?",
-    subtitle: "Partially Signed Bitcoin Transaction",
+    id: "what-is-bitcoin-tx",
+    title: "A Bitcoin transaction, step by step",
+    subtitle: "What actually happens when you send Bitcoin",
     content: (
       <div className="space-y-4">
-        <p>
-          A <span className="text-neon">PSBT</span> is a Bitcoin transaction that
-          isn&apos;t complete yet. Think of it like a contract that multiple people
-          need to sign before it becomes valid.
+        <p className="leading-relaxed">
+          Every Bitcoin transaction has two sides:{" "}
+          <span className="text-neon">inputs</span> — coins you own and are
+          spending — and <span className="text-neon">outputs</span> — where those
+          coins are going. The Bitcoin network validates that your inputs are
+          unspent and that your signature proves you own them.
         </p>
-        <div className="grid grid-cols-3 gap-4 mt-6">
-          <div className="p-3 bg-muted/20 rounded-lg text-center">
-            <div className="text-2xl mb-2">1</div>
-            <div className="text-xs">Create</div>
+        <div className="grid grid-cols-2 gap-3 mt-4">
+          <div className="p-3 bg-muted/20 rounded-lg">
+            <div className="text-neon text-xs mb-1 uppercase">Inputs</div>
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              Coins you already received, called UTXOs — Unspent Transaction
+              Outputs. Each one has a value in sats.
+            </div>
           </div>
-          <div className="p-3 bg-muted/20 rounded-lg text-center">
-            <div className="text-2xl mb-2">2</div>
-            <div className="text-xs">Sign</div>
+          <div className="p-3 bg-muted/20 rounded-lg">
+            <div className="text-neon text-xs mb-1 uppercase">Outputs</div>
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              Bitcoin addresses that will receive the funds. What&apos;s left
+              after outputs and fees is returned to you as change.
+            </div>
           </div>
-          <div className="p-3 bg-muted/20 rounded-lg text-center">
-            <div className="text-2xl mb-2">3</div>
-            <div className="text-xs">Broadcast</div>
-          </div>
+        </div>
+        <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            A transaction is not valid until every input is cryptographically
+            signed by the private key that owns it. No signature = no spend.
+          </p>
         </div>
       </div>
     ),
   },
   {
-    id: "how-game-works",
-    title: "How Entropy Roulette Works",
-    subtitle: "A collaborative Bitcoin game",
+    id: "what-is-psbt",
+    title: "What is a PSBT?",
+    subtitle: "Partially Signed Bitcoin Transaction — BIP 174",
     content: (
       <div className="space-y-4">
-        <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm flex-shrink-0">
-            1
-          </div>
-          <div>
-            <div className="font-semibold text-foreground">Players join</div>
-            <div className="text-muted-foreground text-sm">
-              Each player commits a bet amount in sats
+        <p className="leading-relaxed">
+          A <span className="text-neon">PSBT</span> is a standard format for a
+          Bitcoin transaction that is not yet complete. It carries all the
+          information needed to sign — inputs, outputs, amounts, derivation
+          paths — without ever exposing private keys.
+        </p>
+        <div className="space-y-2">
+          {[
+            {
+              label: "Constructed offline",
+              desc: "The PSBT can be built and inspected without touching the Bitcoin network at all.",
+            },
+            {
+              label: "Passed between devices",
+              desc: "You can move a PSBT via QR code, file, or clipboard. Each party adds their signature.",
+            },
+            {
+              label: "Finalized and broadcast",
+              desc: "Once all required signatures are present the PSBT is finalized into a raw transaction and sent to the network.",
+            },
+          ].map((item) => (
+            <div key={item.label} className="flex gap-3 p-3 bg-muted/20 rounded-lg">
+              <div className="w-2 h-2 rounded-full bg-neon mt-1.5 flex-shrink-0" />
+              <div>
+                <div className="text-xs text-foreground">{item.label}</div>
+                <div className="text-xs text-muted-foreground leading-relaxed">{item.desc}</div>
+              </div>
             </div>
+          ))}
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "psbt-offline-phase",
+    title: "The offline signing phase",
+    subtitle: "Why this matters for self-custody",
+    content: (
+      <div className="space-y-4">
+        <p className="leading-relaxed">
+          The most important property of a PSBT is that it is{" "}
+          <span className="text-neon">signed completely offline</span>. Your
+          private key never leaves your device and never touches the internet.
+        </p>
+        <div className="p-3 bg-muted/20 rounded-lg">
+          <div className="font-mono text-xs text-neon mb-2">Signing flow</div>
+          <div className="space-y-1 text-xs text-muted-foreground leading-relaxed">
+            <div>1. Presenter builds the unsigned PSBT — all inputs, one output</div>
+            <div>2. PSBT is shared with each player (in-browser or as a file)</div>
+            <div>3. Each wallet inspects the PSBT and adds one signature</div>
+            <div>4. Signatures are combined and the transaction is finalized</div>
+            <div>5. The complete, signed transaction is broadcast to Bitcoin</div>
           </div>
         </div>
-        <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm flex-shrink-0">
-            2
-          </div>
-          <div>
-            <div className="font-semibold text-foreground">Everyone signs</div>
-            <div className="text-muted-foreground text-sm">
-              Players sign their input with their wallet
-            </div>
-          </div>
-        </div>
-        <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-neon/20 flex items-center justify-center text-neon font-mono text-sm flex-shrink-0">
-            3
-          </div>
-          <div>
-            <div className="font-semibold text-foreground">Transaction broadcasts</div>
-            <div className="text-muted-foreground text-sm">
-              All inputs combine into one transaction
-            </div>
-          </div>
-        </div>
-        <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-memphis/20 flex items-center justify-center text-memphis font-mono text-sm flex-shrink-0">
-            4
-          </div>
-          <div>
-            <div className="font-semibold text-memphis">Winner selected</div>
-            <div className="text-muted-foreground text-sm">
-              Bitcoin&apos;s entropy picks the winner!
-            </div>
-          </div>
+        <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Your wallet will show you exactly what you are signing — the amount,
+            the destination address, and the fee. Read it before you approve.
+          </p>
         </div>
       </div>
     ),
   },
   {
     id: "entropy-selection",
-    title: "How the Winner is Chosen",
-    subtitle: "Verifiable randomness from Bitcoin",
+    title: "How the winner is chosen",
+    subtitle: "Verifiable randomness from the Bitcoin network",
     content: (
       <div className="space-y-4">
-        <p>
-          When the transaction confirms, it gets a unique{" "}
-          <span className="text-neon">TXID</span> (transaction ID). This ID is
-          generated by the Bitcoin network and is impossible to predict.
+        <p className="leading-relaxed">
+          Once the transaction is mined, it receives a{" "}
+          <span className="text-neon">TXID</span> — a 32-byte hash generated by
+          the Bitcoin network from the transaction data. Nobody can predict or
+          control it before the block is mined.
         </p>
-        <div className="p-4 bg-muted/20 rounded-lg font-mono text-sm">
-          <div className="text-muted-foreground mb-2">Example TXID:</div>
-          <div className="text-neon break-all">
-            a1b2c3...f8e9<span className="text-memphis">42</span>
+        <div className="p-4 bg-muted/20 rounded-lg">
+          <div className="text-xs text-muted-foreground mb-2">Winner formula</div>
+          <code className="text-neon text-sm">
+            last byte of TXID &nbsp;%&nbsp; number of players
+          </code>
+          <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
+            Example: last byte is <span className="text-memphis">0x42</span> (66
+            decimal), five players → 66 % 5 ={" "}
+            <span className="text-memphis">1</span> → Player 2 wins.
           </div>
         </div>
-        <p>
-          We take the <span className="text-memphis">last byte</span> of the TXID
-          and calculate: <br />
-          <code className="text-neon">lastByte % playerCount = winner</code>
-        </p>
-        <p className="text-muted-foreground text-sm">
-          This is provably fair - no one can manipulate the outcome!
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          The result is publicly verifiable on any block explorer. Anyone can
+          reproduce the calculation using only the TXID.
         </p>
       </div>
     ),
   },
   {
     id: "your-safety",
-    title: "Your Funds Are Safe",
-    subtitle: "Understanding the risks",
+    title: "What you are agreeing to",
+    subtitle: "Read this before you sign",
     content: (
-      <div className="space-y-4">
-        <div className="p-4 bg-neon/10 border border-neon/30 rounded-lg">
-          <div className="font-semibold text-neon mb-2">
-            You control your keys
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Your wallet signs the transaction. We never have access to your
-            private keys.
+      <div className="space-y-3">
+        <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+          <div className="text-xs text-neon mb-1">Your keys, your coins</div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            This application never sees your private key. Your wallet signs
+            locally. You can inspect the exact transaction before approving.
           </p>
         </div>
-        <div className="p-4 bg-glitch/10 border border-glitch/30 rounded-lg">
-          <div className="font-semibold text-glitch mb-2">Gambling risk</div>
-          <p className="text-sm text-muted-foreground">
-            Only bet what you can afford to lose. The winner takes all - there
-            are no refunds.
+        <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
+          <div className="text-xs text-glitch mb-1">One input, one bet</div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            You are authorising your wallet to spend the UTXO you selected.
+            The transaction sends that amount to the escrow pot. If you do not
+            win, those sats go to the winner.
           </p>
         </div>
-        <div className="p-4 bg-muted/20 rounded-lg">
-          <div className="font-semibold mb-2">Verify everything</div>
-          <p className="text-sm text-muted-foreground">
-            Check your wallet&apos;s PSBT details before signing. Make sure the
-            output goes to the correct pot address.
+        <div className="p-3 bg-muted/20 rounded-lg">
+          <div className="text-xs text-foreground mb-1">No refunds</div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Once the transaction is broadcast and confirmed it cannot be
+            reversed. Only bet what you are comfortable losing.
           </p>
         </div>
       </div>
@@ -158,114 +185,177 @@ const PSBT_EDUCATIONAL_SLIDES: EducationalSlide[] = [
 
 const PRESENTER_EDUCATIONAL_SLIDES: EducationalSlide[] = [
   {
-    id: "welcome",
-    title: "Welcome to Entropy Roulette",
-    subtitle: "A live Bitcoin education experience",
+    id: "intro-psbt-live",
+    title: "This is a live PSBT",
+    subtitle: "What we are about to do on Bitcoin mainnet",
     content: (
       <div className="space-y-4">
-        <p className="text-lg">
-          This is a <span className="text-neon">collaborative Bitcoin transaction</span>{" "}
-          demonstration where multiple participants combine their inputs into a
-          single transaction.
+        <p className="leading-relaxed">
+          We are going to construct a real{" "}
+          <span className="text-neon">Partially Signed Bitcoin Transaction</span>{" "}
+          together, right now. Every player in this room will contribute an input.
+          One transaction. Many signers. One winner.
         </p>
-        <div className="grid grid-cols-2 gap-4 mt-6">
-          <div className="p-4 bg-muted/20 rounded-lg text-center">
-            <div className="text-3xl text-neon mb-2">PSBT</div>
-            <div className="text-sm text-muted-foreground">
-              Partially Signed Bitcoin Transaction
+        <div className="grid grid-cols-2 gap-3">
+          <div className="p-3 bg-muted/20 rounded-lg">
+            <div className="text-neon text-xs mb-1 uppercase">N inputs</div>
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              One UTXO from each participant&apos;s wallet. Each input is
+              authorised by that participant&apos;s private key only.
             </div>
           </div>
-          <div className="p-4 bg-muted/20 rounded-lg text-center">
-            <div className="text-3xl text-memphis mb-2">1 TX</div>
-            <div className="text-sm text-muted-foreground">
-              Multiple inputs, one output
+          <div className="p-3 bg-muted/20 rounded-lg">
+            <div className="text-neon text-xs mb-1 uppercase">1 output</div>
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              All funds go to a single escrow address controlled by the
+              presenter. This is Tx 1 — the pot.
             </div>
           </div>
+        </div>
+        <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            No smart contract. No multisig script. Pure Bitcoin: each player
+            signs their own input, and the network validates all signatures
+            atomically when the transaction confirms.
+          </p>
         </div>
       </div>
     ),
   },
   {
-    id: "how-to-join",
-    title: "How to Join",
-    subtitle: "Scan the QR code with your phone",
+    id: "utxo-model",
+    title: "UTXOs — the coin model",
+    subtitle: "Bitcoin has no accounts, only unspent outputs",
     content: (
       <div className="space-y-4">
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 border-2 border-neon rounded-lg flex items-center justify-center">
-            <div className="grid grid-cols-2 gap-1">
-              <div className="w-3 h-3 bg-neon rounded-sm" />
-              <div className="w-3 h-3 bg-neon rounded-sm" />
-              <div className="w-3 h-3 bg-neon rounded-sm" />
-              <div className="w-3 h-3 bg-muted rounded-sm" />
-            </div>
-          </div>
-          <div>
-            <div className="font-semibold">1. Scan the QR code</div>
-            <div className="text-sm text-muted-foreground">
-              Use your phone camera or QR app
-            </div>
-          </div>
+        <p className="leading-relaxed">
+          Bitcoin tracks value through{" "}
+          <span className="text-neon">Unspent Transaction Outputs</span>. There
+          are no balances. There are only coins, each identified by the TXID and
+          output index (vout) of the transaction that created them.
+        </p>
+        <div className="p-3 bg-muted/20 rounded-lg font-mono text-xs space-y-1">
+          <div className="text-muted-foreground">A UTXO looks like:</div>
+          <div className="text-neon">txid: a1b2c3…f8e9</div>
+          <div className="text-neon">vout: 0</div>
+          <div className="text-neon">value: 25,000 sats</div>
+          <div className="text-neon">scriptPubKey: OP_0 &lt;pubkeyHash&gt;</div>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 border-2 border-neon rounded-lg flex items-center justify-center text-2xl">
-            $
-          </div>
-          <div>
-            <div className="font-semibold">2. Choose your bet</div>
-            <div className="text-sm text-muted-foreground">
-              Select how many sats you want to bet
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          To spend a UTXO you must provide a valid signature from the private
+          key that matches the scriptPubKey. That signature is added to the
+          PSBT input field — never shared with anyone else.
+        </p>
+      </div>
+    ),
+  },
+  {
+    id: "psbt-anatomy",
+    title: "Inside a PSBT",
+    subtitle: "What the file actually contains",
+    content: (
+      <div className="space-y-4">
+        <p className="leading-relaxed">
+          A PSBT (BIP 174) is a key-value map. The global section holds the
+          unsigned transaction skeleton. Each input section carries the data
+          each signer needs to produce a valid signature.
+        </p>
+        <div className="space-y-2">
+          {[
+            {
+              field: "UNSIGNED_TX",
+              desc: "The transaction with empty scriptSigs / witnesses. Defines all inputs and outputs.",
+            },
+            {
+              field: "WITNESS_UTXO",
+              desc: "The previous output being spent — amount and scriptPubKey. Required for Segwit inputs so the signer can verify the amount.",
+            },
+            {
+              field: "BIP32_DERIVATION",
+              desc: "Tells hardware wallets which key to use without exposing the key itself.",
+            },
+            {
+              field: "PARTIAL_SIG",
+              desc: "Added by each signer. Once all inputs have a PARTIAL_SIG the PSBT can be finalized.",
+            },
+          ].map((row) => (
+            <div key={row.field} className="flex gap-3 p-2 bg-muted/20 rounded">
+              <code className="text-neon text-[10px] w-32 flex-shrink-0 pt-0.5">
+                {row.field}
+              </code>
+              <div className="text-[10px] text-muted-foreground leading-relaxed">
+                {row.desc}
+              </div>
             </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 border-2 border-neon rounded-lg flex items-center justify-center text-2xl">
-            ✓
-          </div>
-          <div>
-            <div className="font-semibold">3. Sign with your wallet</div>
-            <div className="text-sm text-muted-foreground">
-              Xverse, BlueWallet, or any PSBT wallet
-            </div>
-          </div>
+          ))}
         </div>
       </div>
     ),
   },
   {
-    id: "the-graph",
-    title: "Understanding the Graph",
-    subtitle: "Visualizing the transaction",
+    id: "offline-then-online",
+    title: "Offline, then online",
+    subtitle: "The critical trust boundary",
     content: (
       <div className="space-y-4">
-        <p>
-          The central display shows how all player inputs flow into a single
-          PSBT transaction.
+        <p className="leading-relaxed">
+          The key insight of PSBT is that{" "}
+          <span className="text-neon">construction and signing are separated</span>.
+          The PSBT exists completely offline until every required signature is
+          collected. Only the final raw transaction needs to touch the network.
         </p>
-        <div className="flex items-center justify-center gap-4 py-4">
-          <div className="flex flex-col gap-2">
-            <div className="w-20 h-8 bg-muted/30 rounded flex items-center justify-center text-xs">
-              Player 1
+        <div className="space-y-2">
+          {[
+            { label: "OFFLINE", items: ["Build PSBT", "Inspect inputs / outputs", "Add each signature", "Combine all signatures"] },
+            { label: "ONLINE", items: ["Finalize → extract raw hex", "Broadcast to mempool", "Wait for confirmation", "Read entropy from TXID"] },
+          ].map((col) => (
+            <div key={col.label} className="p-3 bg-muted/20 rounded-lg">
+              <div className={`font-mono text-xs mb-2 ${col.label === "OFFLINE" ? "text-neon" : "text-memphis"}`}>
+                {col.label}
+              </div>
+              {col.items.map((item) => (
+                <div key={item} className="text-xs text-muted-foreground leading-relaxed">
+                  — {item}
+                </div>
+              ))}
             </div>
-            <div className="w-20 h-8 bg-muted/30 rounded flex items-center justify-center text-xs">
-              Player 2
-            </div>
-            <div className="w-20 h-8 bg-muted/30 rounded flex items-center justify-center text-xs">
-              Player 3
-            </div>
+          ))}
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "two-transactions",
+    title: "Two transactions, no circular dep",
+    subtitle: "Why the winner is chosen this way",
+    content: (
+      <div className="space-y-4">
+        <div className="space-y-3">
+          <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+            <div className="text-neon text-xs mb-1">Tx 1 — the pot</div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              All player inputs → single output to presenter&apos;s escrow
+              address. Once confirmed, the TXID is fixed and public.
+            </p>
           </div>
-          <div className="text-neon text-2xl">→</div>
-          <div className="w-24 h-24 bg-neon/20 border-2 border-neon rounded-lg flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-xs text-muted-foreground">PSBT</div>
-              <div className="text-neon font-bold">POT</div>
-            </div>
+          <div className="p-3 bg-memphis/10 border border-memphis/30 rounded-lg">
+            <div className="text-memphis text-xs mb-1">Entropy formula</div>
+            <code className="text-xs text-foreground block mt-1">
+              winner_index = last_byte(Tx1_TXID) % player_count
+            </code>
+            <p className="text-xs text-muted-foreground leading-relaxed mt-1">
+              The last byte is determined by the mining process — it cannot be
+              predicted before the block is found.
+            </p>
+          </div>
+          <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg">
+            <div className="text-neon text-xs mb-1">Tx 2 — the payout</div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Presenter builds and signs Tx 2 from their wallet: escrow UTXO
+              (Tx1:0) → winner&apos;s address. No dependency on Tx 2 when signing Tx 1.
+            </p>
           </div>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Each line represents a signed input. Green means signed, gray means
-          waiting.
-        </p>
       </div>
     ),
   },

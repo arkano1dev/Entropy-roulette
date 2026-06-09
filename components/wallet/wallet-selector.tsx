@@ -209,7 +209,9 @@ export function WalletSelector({
     wallet?.type === "desktop" || wallet?.type === "mobile";
   const isManual = wallet?.type === "manual";
 
-  const MESSAGE_TO_SIGN = "I want to play Entropy Roulette";
+  // Human-readable message displayed inside the wallet — no addresses, plain English.
+  const MESSAGE_TO_SIGN =
+    "I am joining Entropy Roulette. I confirm I want to participate in this Bitcoin PSBT game and that my wallet address belongs to me.";
 
   // Step A: connect wallet (get address)
   const handleConnect = async () => {
@@ -339,8 +341,8 @@ export function WalletSelector({
 
   const actionLabel =
     mode === "sign-message"
-      ? `Sign with ${wallet?.name ?? "wallet"}`
-      : `Sign PSBT with ${wallet?.name ?? "wallet"}`;
+      ? `Confirm with ${wallet?.name ?? "wallet"}`
+      : `Sign transaction with ${wallet?.name ?? "wallet"}`;
 
   const signHandler =
     mode === "sign-message" ? handleSignMessage : handleSignPsbt;
@@ -455,24 +457,38 @@ export function WalletSelector({
                     </div>
 
                     {signWaiting ? (
-                      <div className="p-3 bg-muted/20 rounded-lg text-center font-mono text-xs text-muted-foreground">
-                        Waiting for presenter to publish PSBT...
+                      <div className="p-3 bg-muted/20 rounded-lg font-mono text-xs text-muted-foreground space-y-1">
+                        <div className="text-foreground">Waiting for the PSBT</div>
+                        <div className="leading-relaxed">
+                          The presenter is assembling the transaction with all
+                          player inputs. Once it is ready your wallet will show
+                          you the exact amount and destination to approve.
+                        </div>
                       </div>
                     ) : (
-                      <Button
-                        onClick={signHandler}
-                        disabled={signDisabled}
-                        className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-5"
-                      >
-                        {isSigning ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Signing...
-                          </>
-                        ) : (
-                          actionLabel
+                      <>
+                        {mode === "sign-psbt" && (
+                          <div className="p-3 bg-neon/10 border border-neon/30 rounded-lg font-mono text-xs text-muted-foreground leading-relaxed">
+                            Your wallet will display the transaction details —
+                            the amount you are spending and the escrow address
+                            it goes to. Review them carefully before approving.
+                          </div>
                         )}
-                      </Button>
+                        <Button
+                          onClick={signHandler}
+                          disabled={signDisabled}
+                          className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-5"
+                        >
+                          {isSigning ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              Opening wallet...
+                            </>
+                          ) : (
+                            actionLabel
+                          )}
+                        </Button>
+                      </>
                     )}
 
                     <button
@@ -496,9 +512,12 @@ export function WalletSelector({
                   // File wallets can't sign messages in-browser — ask for address
                   <div className="p-3 bg-muted/20 border border-border rounded-lg">
                     <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                      {wallet?.name} does not support in-browser message
-                      signing. Enter your receiving address below to join — you
-                      will sign your PSBT input later using a downloaded file.
+                      {wallet?.name} signs transactions offline — it cannot
+                      confirm your identity through the browser. Enter your
+                      Bitcoin receiving address below to register your spot.
+                      When the PSBT is ready you will download it, sign your
+                      input in {wallet?.name}, and hand the signed file to the
+                      presenter.
                     </p>
                   </div>
                 ) : (
@@ -506,8 +525,8 @@ export function WalletSelector({
                     <div className="p-3 bg-muted/20 border border-border rounded-lg">
                       <p className="font-mono text-xs text-muted-foreground leading-relaxed">
                         {wallet?.name === "Sparrow"
-                          ? "Download the PSBT file, open it in Sparrow (File → Open Transaction), sign your input, and return the signed file to the presenter."
-                          : "Download the PSBT file and open it in BlueWallet via Send → PSBT to sign your input."}
+                          ? "Download the PSBT file. In Sparrow: File → Open Transaction → sign your input → Export as PSBT. Hand the exported file back to the presenter."
+                          : "Download the PSBT file. In BlueWallet: Send → PSBT → sign your input → export the signed PSBT. Hand the exported file back to the presenter."}
                       </p>
                     </div>
 

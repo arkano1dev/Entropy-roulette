@@ -228,6 +228,7 @@ function PlayerPageInner() {
 
           <div className="bg-card border border-border rounded-lg p-6">
             <WalletSelector
+              mode={publishedPsbt ? "sign-psbt" : "sign-message"}
               psbtBase64={publishedPsbt ?? null}
               inputIndex={0}
               betAmount={betAmount}

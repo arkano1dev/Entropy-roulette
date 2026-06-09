@@ -440,21 +440,47 @@ export default function PresenterPage() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <Button
               onClick={() => setMode("game")}
               variant="outline"
+              size="sm"
               className="font-mono"
             >
-              SHOW GAME VIEW
+              GAME VIEW
             </Button>
-            <Button
-              onClick={handleOpenLobby}
-              disabled={session?.phase !== "IDLE"}
-              className="bg-neon text-background hover:bg-neon/80 font-mono"
-            >
-              OPEN LOBBY
-            </Button>
+            {session?.phase === "IDLE" && (
+              <Button
+                onClick={handleOpenLobby}
+                className="bg-neon text-background hover:bg-neon/80 font-mono"
+                size="sm"
+              >
+                OPEN LOBBY
+              </Button>
+            )}
+            {session?.phase === "LOBBY_OPEN" && (
+              <Button
+                onClick={handleCloseLobby}
+                className="bg-glitch text-white hover:bg-glitch/80 font-mono"
+                size="sm"
+              >
+                CLOSE LOBBY
+                {session.players.length > 0 && (
+                  <span className="ml-2 bg-white/20 rounded px-1 text-xs">
+                    {session.players.length}
+                  </span>
+                )}
+              </Button>
+            )}
+            {session?.phase === "LOBBY_CLOSED" && (
+              <Button
+                onClick={handleCollectSignatures}
+                className="bg-memphis text-background hover:bg-memphis/80 font-mono"
+                size="sm"
+              >
+                BUILD PSBT
+              </Button>
+            )}
           </div>
         </header>
 
@@ -573,33 +599,38 @@ export default function PresenterPage() {
                       {[
                         {
                           step: 1,
-                          title: "Connect Xverse",
-                          desc: "Presenter connects wallet and signs game message",
+                          title: "Presenter connects wallet",
+                          desc: "Xverse connects and signs the game creation message. This sets the escrow address.",
                         },
                         {
                           step: 2,
-                          title: "Players Join",
-                          desc: "Each player scans QR, connects Xverse, selects UTXO",
+                          title: "Lobby opens — players scan & join",
+                          desc: "Each player scans the QR, selects their wallet (Xverse, Unisat, Leather, Alby, Sparrow, or BlueWallet), and registers with their Bitcoin address.",
                         },
                         {
                           step: 3,
-                          title: "Build Escrow PSBT",
-                          desc: "All inputs → single escrow output. Players sign.",
+                          title: "Lobby closes — PSBT is built",
+                          desc: "All player UTXOs are assembled into one unsigned PSBT. One output: the escrow address.",
                         },
                         {
                           step: 4,
-                          title: "Broadcast Tx 1",
-                          desc: "Combined PSBT broadcast to mainnet",
+                          title: "Players sign their input",
+                          desc: "Extension wallets pop a signing dialog. Sparrow and BlueWallet users download the PSBT file, sign offline, and return it to the presenter.",
                         },
                         {
                           step: 5,
-                          title: "Winner Selected",
-                          desc: "TXID entropy: last byte % player count",
+                          title: "Finalize & broadcast Tx 1",
+                          desc: "All partial signatures are combined. The PSBT is finalized and the raw transaction is broadcast to the Bitcoin network.",
                         },
                         {
                           step: 6,
-                          title: "Payout (Tx 2)",
-                          desc: "Presenter broadcasts payout to winner",
+                          title: "Winner from TXID entropy",
+                          desc: "Last byte of the confirmed TXID modulo player count. Verifiable by anyone on any block explorer.",
+                        },
+                        {
+                          step: 7,
+                          title: "Payout — Tx 2",
+                          desc: "Presenter signs and broadcasts Tx 2 from their wallet: escrow UTXO → winner's address.",
                         },
                       ].map((item) => (
                         <div
