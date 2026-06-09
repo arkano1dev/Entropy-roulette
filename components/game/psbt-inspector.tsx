@@ -44,7 +44,7 @@ export function PSBTInspector({ psbtBase64, players, feeRate, phase }: PSBTInspe
 
   const estimatedVsize = estimateTxSize(details.inputCount, details.outputCount);
   const estimatedFee = calculateFee(details.inputCount, details.outputCount, feeRate);
-  const actualFee = Number(details.fee);
+  const actualFee = Number(details.feeSats);
 
   // Map players to inputs
   const inputRows = details.inputs.map((input, index) => {
@@ -133,7 +133,7 @@ export function PSBTInspector({ psbtBase64, players, feeRate, phase }: PSBTInspe
             Inputs ({details.inputCount})
           </span>
           <span className="font-mono text-xs text-memphis">
-            Total: {formatSats(Number(details.totalInputValue))}
+            Total: {formatSats(details.totalInputSats)}
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -199,25 +199,37 @@ export function PSBTInspector({ psbtBase64, players, feeRate, phase }: PSBTInspe
               </tr>
             </thead>
             <tbody>
-              {details.outputs.map((output, index) => (
-                <tr key={index} className="border-b border-border/50 last:border-0">
-                  <td className="font-mono text-xs text-neon py-2 pr-2">
-                    {truncateAddress(output.address, 10)}
-                  </td>
-                  <td className="font-mono text-xs text-memphis py-2 pr-2">
-                    {formatSats(Number(output.value))}
-                  </td>
-                  <td className="font-mono text-[10px] text-muted-foreground py-2">
-                    {output.address.startsWith("bc1q")
-                      ? "P2WPKH"
-                      : output.address.startsWith("bc1p")
-                      ? "P2TR"
-                      : output.address.startsWith("3")
-                      ? "P2SH"
-                      : "P2PKH"}
-                  </td>
-                </tr>
-              ))}
+              {details.outputs.map((output, index) => {
+                const addr = output.address ?? null;
+                const scriptType = output.isOpReturn
+                  ? "OP_RETURN"
+                  : !addr
+                  ? "UNKNOWN"
+                  : addr.startsWith("bc1q")
+                  ? "P2WPKH"
+                  : addr.startsWith("bc1p")
+                  ? "P2TR"
+                  : addr.startsWith("3")
+                  ? "P2SH"
+                  : "P2PKH";
+                return (
+                  <tr key={index} className="border-b border-border/50 last:border-0">
+                    <td className="font-mono text-xs text-neon py-2 pr-2">
+                      {output.isOpReturn
+                        ? `OP_RETURN: ${output.opReturnText ?? ""}`
+                        : addr
+                        ? truncateAddress(addr, 10)
+                        : "—"}
+                    </td>
+                    <td className="font-mono text-xs text-memphis py-2 pr-2">
+                      {formatSats(Number(output.value))}
+                    </td>
+                    <td className="font-mono text-[10px] text-muted-foreground py-2">
+                      {scriptType}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -13,7 +13,8 @@ import {
   signPlayerPsbt,
 } from "@/lib/bitcoin/sats-connect";
 import { truncateAddress } from "@/lib/bitcoin/wallet-connect";
-import { discoverUTXOs, selectBestUTXO, type DiscoveredUTXO } from "@/lib/bitcoin/utxo";
+import { discoverUTXOs, selectBestUTXO } from "@/lib/bitcoin/utxo";
+import type { UTXO } from "@/lib/game/types";
 import { AlertCircle, CheckCircle } from "lucide-react";
 
 interface WalletSelectorProps {
@@ -32,8 +33,8 @@ export function WalletSelector({
   const [walletState, setWalletState] = useState<PlayerWalletState | undefined>(
     undefined
   );
-  const [utxos, setUtxos] = useState<DiscoveredUTXO[]>([]);
-  const [selectedUtxo, setSelectedUtxo] = useState<DiscoveredUTXO | null>(null);
+  const [utxos, setUtxos] = useState<UTXO[]>([]);
+  const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
   const [utxoError, setUtxoError] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isSigning, setIsSigning] = useState(false);
@@ -181,11 +182,7 @@ export function WalletSelector({
                     <div className="font-mono text-[10px] text-muted-foreground">
                       {truncateAddress(utxo.txid, 6)}:{utxo.vout}
                     </div>
-                    {!utxo.confirmed && (
-                      <div className="font-mono text-[10px] text-memphis mt-1">
-                        Unconfirmed
-                      </div>
-                    )}
+
                   </button>
                 ))}
               </div>

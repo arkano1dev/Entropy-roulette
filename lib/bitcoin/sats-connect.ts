@@ -34,7 +34,7 @@ export function getXverseProvider(): BitcoinProvider | null {
 // Connect wallet and get payment address
 export async function connectXverseWallet(): Promise<XverseWalletInfo> {
   const response = await request("wallet_connect", {
-    purposes: [AddressPurpose.Payment],
+    addresses: [AddressPurpose.Payment],
   });
 
   if (response.status === "error") {

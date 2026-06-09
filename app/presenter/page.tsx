@@ -327,7 +327,7 @@ export default function PresenterPage() {
     if (!session || !keypair) return "";
     const baseUrl =
       typeof window !== "undefined" ? window.location.origin : "";
-    return `${baseUrl}/player?game=${session.id}&presenter=${keypair.publicKey}`;
+    return `${baseUrl}/player?game=${session.id}&presenter=${keypair.pubkey}`;
   };
 
   // Setup screen

@@ -222,9 +222,9 @@ function handleDecode(body: Record<string, unknown>) {
     let opReturnText: string | undefined;
     if (isOpReturn && out.script.length > 2) {
       try {
-        opReturnText = out.script.slice(2).toString("utf8");
+        opReturnText = Buffer.from(out.script.slice(2)).toString("utf8");
       } catch {
-        opReturnText = out.script.slice(2).toString("hex");
+        opReturnText = Buffer.from(out.script.slice(2)).toString("hex");
       }
     }
     return {
