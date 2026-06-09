@@ -41,15 +41,8 @@ export async function POST(request: NextRequest) {
       process.env.UNISAT_API_URL || "https://open-api.unisat.io";
 
     if (!apiToken) {
-      // Graceful degradation: return empty UTXO list so the UI can show a message
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "UNISAT_API_TOKEN is not configured. Add it in Vars settings to enable real UTXO fetching.",
-        },
-        { status: 503 }
-      );
+      // Graceful degradation: fall back to mempool.space (fetches scriptPubKey per tx)
+      return await fetchMempoolFallback(address);
     }
 
     // Fetch all pages from Unisat (handles pagination)
@@ -114,6 +107,56 @@ export async function POST(request: NextRequest) {
         success: false,
         error: err instanceof Error ? err.message : "Unknown error",
       },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Fallback UTXO provider using mempool.space.
+ * Fetches scriptPubKey from each tx output — slower but no API key needed.
+ * Adapted from brc20kit approach of always including scriptPubKey for PSBT.
+ */
+async function fetchMempoolFallback(address: string): Promise<NextResponse> {
+  try {
+    const res = await fetch(
+      `https://mempool.space/api/address/${encodeURIComponent(address)}/utxo`
+    );
+    if (!res.ok) throw new Error(`mempool.space error (${res.status})`);
+
+    const raw = (await res.json()) as Array<{
+      txid: string;
+      vout: number;
+      value: number;
+      status: { confirmed: boolean };
+    }>;
+
+    // Fetch scriptPubKey for each UTXO from the raw transaction
+    const utxos = await Promise.all(
+      raw.slice(0, 20).map(async (u) => {
+        try {
+          const txRes = await fetch(`https://mempool.space/api/tx/${u.txid}`);
+          const tx = (await txRes.json()) as {
+            vout: Array<{ scriptpubkey: string }>;
+          };
+          const scriptPubKey = tx.vout[u.vout]?.scriptpubkey ?? "";
+          return { txid: u.txid, vout: u.vout, value: u.value, scriptPubKey };
+        } catch {
+          return { txid: u.txid, vout: u.vout, value: u.value, scriptPubKey: "" };
+        }
+      })
+    );
+
+    return NextResponse.json({
+      success: true,
+      data: utxos.filter((u) => u.scriptPubKey),
+      total: utxos.length,
+      provider: "mempool.space",
+      note: "Set UNISAT_API_TOKEN env var for faster UTXO fetching with full pagination.",
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "Fallback failed" },
       { status: 500 }
     );
   }

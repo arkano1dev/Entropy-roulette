@@ -13,8 +13,8 @@ export interface UTXODiscoveryResult {
 
 /**
  * Fetch UTXOs for an address via the internal /api/utxos route.
- * The route is backed by Unisat API and returns scriptPubKey for each UTXO,
- * which is required for proper PSBT construction (from brc20kit pattern).
+ * The route is backed by Unisat API and returns scriptPubKey (scriptPk)
+ * for each UTXO, which is required for PSBT construction (brc20kit pattern).
  */
 export async function discoverUTXOs(
   address: string,
@@ -51,8 +51,8 @@ export async function discoverUTXOs(
 }
 
 /**
- * Select the best single UTXO for a given required amount + fee buffer.
- * Prefers the smallest UTXO that covers the requirement (avoids change waste).
+ * Select the best single UTXO for a required amount + fee buffer.
+ * Prefers the smallest UTXO that covers the requirement (avoids waste).
  */
 export function selectBestUTXO(
   utxos: UTXO[],
@@ -60,14 +60,11 @@ export function selectBestUTXO(
   feeBuffer = 10000
 ): UTXO | null {
   const needed = requiredSats + feeBuffer;
-
   const candidates = utxos
     .filter((u) => u.value >= needed)
     .sort((a, b) => a.value - b.value);
 
   if (candidates.length > 0) return candidates[0];
-
-  // Fall back to largest available
   return [...utxos].sort((a, b) => b.value - a.value)[0] ?? null;
 }
 

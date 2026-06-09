@@ -10,7 +10,6 @@
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import type { Player } from "@/lib/game/types";
@@ -51,7 +50,10 @@ export function PsbtBuilder({
     "build" | "inspect" | "finalize" | "broadcast"
   >("build");
 
-  const byteLen = Buffer.byteLength(opReturnText, "utf8");
+  const byteLen =
+    typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(opReturnText).length
+      : opReturnText.length;
   const opReturnTooLong = byteLen > 80;
 
   // --- Build the initial PSBT ---
@@ -106,41 +108,35 @@ export function PsbtBuilder({
     }
   }, [players, presenterAddress, feeRate, opReturnEnabled, opReturnText, onPsbtBuilt]);
 
-  // --- Finalize (combine all signed fragments + extract raw tx) ---
+  // --- Finalize: combine available signed fragments, then extract raw tx ---
   const handleFinalize = useCallback(async () => {
     if (!buildState?.psbtBase64) return;
     setError(null);
     setIsBusy(true);
     try {
-      // Collect all signed PSBTs from players
       const signedFragments = players
         .map((p) => p.signedPsbt)
-        .filter((s): s is string => !!s);
+        .filter((s): s is string => Boolean(s));
 
-      if (signedFragments.length < players.length) {
-        throw new Error(
-          `Only ${signedFragments.length}/${players.length} players have signed`
-        );
+      // Combine base PSBT + all signed fragments (if any)
+      let combinedBase64 = buildState.psbtBase64;
+      if (signedFragments.length > 0) {
+        const allPsbts = [buildState.psbtBase64, ...signedFragments];
+        const combineRes = await fetch("/api/psbt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "combine", psbts: allPsbts }),
+        });
+        const combineData = await combineRes.json();
+        if (!combineData.success) throw new Error(combineData.error);
+        combinedBase64 = combineData.data.psbtBase64;
       }
 
-      // Combine base + all fragments
-      const allPsbts = [buildState.psbtBase64, ...signedFragments];
-      const combineRes = await fetch("/api/psbt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "combine", psbts: allPsbts }),
-      });
-      const combineData = await combineRes.json();
-      if (!combineData.success) throw new Error(combineData.error);
-
-      // Finalize
+      // Finalize all inputs and extract raw transaction
       const finalRes = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "finalize",
-          psbtBase64: combineData.data.psbtBase64,
-        }),
+        body: JSON.stringify({ action: "finalize", psbtBase64: combinedBase64 }),
       });
       const finalData = await finalRes.json();
       if (!finalData.success) throw new Error(finalData.error);

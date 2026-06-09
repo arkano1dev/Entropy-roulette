@@ -42,8 +42,8 @@ export function PSBTInspector({ psbtBase64, players, feeRate, phase }: PSBTInspe
     );
   }
 
-  const estimatedVsize = estimateTxSize(details.inputCount);
-  const estimatedFee = calculateFee(details.inputCount, feeRate);
+  const estimatedVsize = estimateTxSize(details.inputCount, details.outputCount);
+  const estimatedFee = calculateFee(details.inputCount, details.outputCount, feeRate);
   const actualFee = Number(details.fee);
 
   // Map players to inputs
