@@ -236,8 +236,40 @@ function ScrollPage({ onReady }: { onReady: () => void }) {
           </p>
         </div>
 
+        {/* Creator contact */}
+        <div className="space-y-2 pt-2">
+          <p className="font-mono text-[10px] text-muted-foreground uppercase">Created by</p>
+          <a
+            href="https://njump.me/npub1p2x3t3njq44vsk24qjkauzurvfd59c224qyu2mpgu9jverk9tfrqnz0ql5"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+          >
+            <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">NOSTR</span>
+            <span className="font-mono text-xs text-muted-foreground truncate">npub1p2x3t3njq44v…</span>
+          </a>
+          <a
+            href="https://t.me/arkano21"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+          >
+            <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">TELEGRAM</span>
+            <span className="font-mono text-xs text-muted-foreground truncate">@arkano21</span>
+          </a>
+          <a
+            href="https://github.com/arkano1dev/v0-entropy-roulette"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+          >
+            <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">GITHUB</span>
+            <span className="font-mono text-xs text-muted-foreground truncate">arkano1dev/v0-entropy-roulette</span>
+          </a>
+        </div>
+
         {/* CTA */}
-        <div className="pt-4 space-y-2">
+        <div className="pt-2 space-y-2">
           <p className="font-mono text-[10px] text-muted-foreground/60 text-center">
             Game under development — experimental, mainnet, use at your own risk.
           </p>
