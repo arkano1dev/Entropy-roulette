@@ -69,9 +69,9 @@ export default function PresenterPage() {
   const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
   const [rawTxCache, setRawTxCache] = useState<string | null>(null);
 
-  // OP_RETURN message — required, set at setup, carried through to build
+  // OP_RETURN message — optional at setup; can be set/changed until lobby closes
   const [opReturnMessage, setOpReturnMessage] = useState("");
-  const opReturnValid = opReturnMessage.trim().length > 0 && opReturnMessage.length <= 80;
+  const opReturnValid = opReturnMessage.length === 0 || opReturnMessage.length <= 80;
 
   // Add log entry
   const addLog = useCallback(
@@ -100,7 +100,7 @@ export default function PresenterPage() {
     fetchData();
   }, [addLog]);
 
-  // Handle initialization
+  // Handle initialization — auto-opens lobby immediately after
   const handleInitialize = async () => {
     if (!walletState?.connected) {
       addLog("error", "Connect Xverse wallet first");
@@ -110,19 +110,19 @@ export default function PresenterPage() {
       addLog("error", "Sign the game creation message first");
       return;
     }
-    if (!opReturnValid) {
-      addLog("error", "OP_RETURN message is required (1–80 bytes)");
-      return;
-    }
 
     try {
       addLog("system", "Initializing entropy field...");
       const newSession = await initializeGame();
       addLog("success", `Game created: ${newSession.id.toUpperCase()}`);
-      addLog("info", `OP_RETURN: "${opReturnMessage.trim()}"`);
+      if (opReturnMessage.trim()) {
+        addLog("info", `OP_RETURN: "${opReturnMessage.trim()}"`);
+      }
       addLog("info", "Escrow address: presenter wallet (Tx 1)");
       setMode("game");
       longPulse();
+      // Auto-open lobby
+      addLog("system", "Opening lobby automatically...");
     } catch (err) {
       addLog("error", `Initialization failed: ${err}`);
     }
@@ -162,7 +162,7 @@ export default function PresenterPage() {
           players: playersWithUtxo.map((p) => ({ utxo: p.utxo })),
           escrowAddress: walletState.address,
           feeRate,
-          opReturnMessage: opReturnMessage.trim(),
+          opReturnData: opReturnMessage.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -294,6 +294,18 @@ export default function PresenterPage() {
     return () => clearInterval(pollInterval);
   }, [isPolling, txid, session, addLog, confirmAndResolve, victoryPulse, walletState, feeRate, totalPot]);
 
+  // Auto-open lobby when game view activates
+  useEffect(() => {
+    if (mode === "game" && session?.phase === "IDLE") {
+      openLobby().then(() => {
+        addLog("success", "Lobby is now open — players can join");
+      }).catch(() => {
+        addLog("error", "Failed to auto-open lobby");
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
   // Log player joins
   useEffect(() => {
     if (session?.players) {
@@ -338,11 +350,11 @@ export default function PresenterPage() {
               connectedState={walletState}
             />
 
-            {/* OP_RETURN — required */}
+            {/* OP_RETURN — optional, can be set until PSBT is built */}
             <div className="space-y-1">
               <label className="font-mono text-xs text-neon uppercase">
                 OP_RETURN message
-                <span className="text-glitch ml-1">*</span>
+                <span className="text-muted-foreground ml-1 normal-case">(optional)</span>
               </label>
               <input
                 type="text"
@@ -353,7 +365,7 @@ export default function PresenterPage() {
                 className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
               />
               <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
-                <span>Embedded permanently on-chain in Tx 1. Required.</span>
+                <span>Embedded permanently on-chain in Tx 1. Optional — can be set later.</span>
                 <span className={opReturnMessage.length > 80 ? "text-glitch" : ""}>
                   {opReturnMessage.length}/80
                 </span>
@@ -383,9 +395,9 @@ export default function PresenterPage() {
               {isInitializing ? "INITIALIZING..." : "START GAME"}
             </Button>
 
-            {!opReturnValid && opReturnMessage.length === 0 && (
+            {!walletState?.signature && walletState?.connected && (
               <p className="font-mono text-[10px] text-muted-foreground text-center">
-                Enter an OP_RETURN message to continue
+                Sign the game creation message to continue
               </p>
             )}
 
@@ -483,17 +495,32 @@ export default function PresenterPage() {
             </div>
           </div>
 
-          {/* OP_RETURN badge */}
-          {opReturnMessage && (
-            <div className="px-4 py-3 border-b border-border">
-              <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
-                OP_RETURN (on-chain)
-              </div>
-              <div className="font-mono text-xs text-neon break-all leading-relaxed">
-                {opReturnMessage.trim()}
-              </div>
+          {/* OP_RETURN — editable until PSBT is built */}
+          <div className="px-4 py-3 border-b border-border">
+            <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1.5">
+              OP_RETURN (on-chain)
             </div>
-          )}
+            {session?.phase === "LOBBY_OPEN" || session?.phase === "IDLE" || session?.phase === "LOBBY_CLOSED" ? (
+              <>
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={opReturnMessage}
+                  onChange={(e) => setOpReturnMessage(e.target.value)}
+                  placeholder="Set message before building PSBT..."
+                  className="w-full px-2 py-1.5 bg-muted/20 border border-border rounded font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
+                />
+                <div className="flex justify-between font-mono text-[10px] text-muted-foreground mt-1">
+                  <span>Optional — embedded in Tx 1</span>
+                  <span className={opReturnMessage.length > 80 ? "text-glitch" : ""}>{opReturnMessage.length}/80</span>
+                </div>
+              </>
+            ) : (
+              <div className="font-mono text-xs text-neon break-all leading-relaxed">
+                {opReturnMessage.trim() || <span className="text-muted-foreground italic">none</span>}
+              </div>
+            )}
+          </div>
 
           {/* Education accordion */}
           <div className="flex-1">

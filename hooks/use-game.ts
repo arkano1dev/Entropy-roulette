@@ -226,7 +226,16 @@ export function usePresenterGame() {
   const handlePlayerJoin = useCallback(
     (playerId: string, pubkey: string, displayName: string, amount: number, receivingAddress: string, utxo?: any) => {
       setSession((current) => {
-        if (!current || current.phase !== "LOBBY_OPEN") return current;
+        if (!current) return current;
+        // Accept joins during LOBBY_OPEN; also accept during IDLE in case of
+        // timing race between openLobby() resolving and Nostr events arriving.
+        const acceptPhases: GamePhase[] = ["LOBBY_OPEN", "IDLE"];
+        if (!acceptPhases.includes(current.phase)) return current;
+
+        // Deduplicate: don't add the same player twice
+        if (current.players.some((p) => p.id === playerId || p.pubkey === pubkey)) {
+          return current;
+        }
 
         const newPlayer: Player = {
           id: playerId,

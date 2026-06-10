@@ -250,6 +250,58 @@ function ScrollPage({ onReady }: { onReady: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
+// Feedback block — shown on result screen
+// ---------------------------------------------------------------------------
+
+function FeedbackBlock() {
+  const [feedbackText, setFeedbackText] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const handleSend = () => {
+    if (!feedbackText.trim()) return;
+    // Encode as mailto link so it opens the default mail app
+    const subject = encodeURIComponent("Entropy Roulette — Player Feedback");
+    const body = encodeURIComponent(feedbackText.trim());
+    window.open(`mailto:feedback@entropyroulette.xyz?subject=${subject}&body=${body}`, "_blank");
+    setSent(true);
+  };
+
+  if (sent) {
+    return (
+      <div className="bg-card border border-neon/30 rounded-lg p-4 text-center">
+        <p className="font-mono text-sm text-neon">Thanks for your feedback!</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+      <div className="font-mono text-xs text-muted-foreground uppercase">
+        Share your feedback
+      </div>
+      <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+        How was the experience? Suggestions, bugs, or anything you want to tell us?
+      </p>
+      <textarea
+        value={feedbackText}
+        onChange={(e) => setFeedbackText(e.target.value)}
+        placeholder="Your thoughts..."
+        rows={3}
+        className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon resize-none"
+      />
+      <Button
+        onClick={handleSend}
+        disabled={!feedbackText.trim()}
+        className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
+        size="sm"
+      >
+        Send feedback
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main inner component
 // ---------------------------------------------------------------------------
 
@@ -270,7 +322,8 @@ function PlayerPageInner() {
   const { longPulse, victoryPulse, defeatPulse } = useHaptic();
 
   const [step, setStep] = useState<PlayerStep>("scroll");
-  const [betAmount, setBetAmount] = useState(25000);
+  const [betAmount, setBetAmount] = useState(5000);
+  const [betInputStr, setBetInputStr] = useState("5000");
   const [feeRate, setFeeRate] = useState(10);
   const [joinedAddress, setJoinedAddress] = useState("");
   const [chosenWalletId, setChosenWalletId] = useState<WalletId | null>(null);
@@ -319,47 +372,38 @@ function PlayerPageInner() {
 
   // ── Step: sign-message complete → bet ────────────────────────────────────
   // Called by WalletSelector when the sign-message step is done
+  // We only record the address here — actual lobby join happens after bet is confirmed
   const handleMessageSigned = async (signResult: WalletSignResult) => {
     setJoinedAddress(signResult.address);
     setChosenWalletId(signResult.walletId);
     setMessageSigned(true);
-
-    // Register in lobby with a placeholder bet (real bet set in next step)
-    setSubmitError(null);
-    setIsSubmitting(true);
-    try {
-      await joinGame(0, signResult.address, undefined);
-      setStep("bet");
-      longPulse();
-    } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Failed to join game");
-    } finally {
-      setIsSubmitting(false);
-    }
+    setStep("bet");
+    longPulse();
   };
 
   // File/manual wallets: address-only registration
   const handleManualJoin = async (address: string) => {
     setJoinedAddress(address);
     setChosenWalletId("manual");
+    setStep("bet");
+    longPulse();
+  };
+
+  // ── Step: bet confirmed → join lobby → wait ───────────────────────────────
+  const handleBetConfirmed = async () => {
+    if (betAmount < 5000) return;
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      await joinGame(0, address, undefined);
-      setStep("bet");
+      // Now register in the lobby with the real bet amount
+      await joinGame(betAmount, joinedAddress, undefined);
+      setStep("wait");
       longPulse();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Failed to join game");
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  // ── Step: bet confirmed → wait ────────────────────────────────────────────
-  const handleBetConfirmed = () => {
-    if (betAmount < 5000) return;
-    setStep("wait");
-    longPulse();
   };
 
   // ── Step: wait — sign PSBT when it arrives ────────────────────────────────
@@ -504,11 +548,22 @@ function PlayerPageInner() {
               Bet amount (sats)
             </label>
             <Input
-              type="number"
-              value={betAmount}
-              onChange={(e) => setBetAmount(Number(e.target.value))}
-              min={5000}
-              max={1000000}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={betInputStr}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/\D/g, "");
+                setBetInputStr(raw);
+                const parsed = parseInt(raw, 10);
+                setBetAmount(isNaN(parsed) ? 0 : parsed);
+              }}
+              onBlur={() => {
+                if (!betInputStr || parseInt(betInputStr, 10) < 5000) {
+                  setBetInputStr("5000");
+                  setBetAmount(5000);
+                }
+              }}
               className="font-mono text-neon text-lg"
             />
             <div className="flex items-center gap-2 text-xs font-mono">
@@ -544,13 +599,19 @@ function PlayerPageInner() {
             </div>
           )}
 
+          {submitError && (
+            <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
+              <p className="font-mono text-xs text-glitch">{submitError}</p>
+            </div>
+          )}
+
           <Button
             onClick={handleBetConfirmed}
-            disabled={betAmount < 5000}
+            disabled={betAmount < 5000 || isSubmitting}
             className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-6"
             size="lg"
           >
-            Confirm bet — {formatSats(betAmount)}
+            {isSubmitting ? "Joining game..." : `Confirm bet — ${formatSats(betAmount)}`}
           </Button>
         </div>
       </div>
@@ -688,7 +749,7 @@ function PlayerPageInner() {
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="max-w-md w-full"
+          className="max-w-md w-full space-y-4"
         >
           {result.isWinner ? (
             <div className="bg-card border border-memphis/50 rounded-lg p-8 text-center space-y-4">
@@ -726,6 +787,9 @@ function PlayerPageInner() {
               )}
             </div>
           )}
+
+          {/* Feedback block */}
+          <FeedbackBlock />
         </motion.div>
       </div>
     );
