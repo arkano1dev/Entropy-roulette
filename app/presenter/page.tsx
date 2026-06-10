@@ -15,6 +15,8 @@ import {
   getFeeEstimates,
   getBlockHeight,
   getTransactionStatus,
+  getSpendableUTXO,
+  type SpendableUTXO,
 } from "@/lib/bitcoin/mempool-api";
 import {
   calculateWinner,
@@ -72,6 +74,14 @@ export default function PresenterPage() {
   // OP_RETURN message — set in the game view before building the PSBT
   const [opReturnMessage, setOpReturnMessage] = useState("");
 
+  // Presenter self-stake — the presenter's own UTXO is the FIRST input of the
+  // transaction. This makes a PSBT possible with zero players: presenter alone
+  // can build → sign → broadcast to demonstrate writing to the blockchain.
+  const [presenterStake, setPresenterStake] = useState(10000);
+  const [presenterStakeStr, setPresenterStakeStr] = useState("10000");
+  const [presenterUtxo, setPresenterUtxo] = useState<SpendableUTXO | null>(null);
+  const [isFetchingUtxo, setIsFetchingUtxo] = useState(false);
+
   // Add log entry
   const addLog = useCallback(
     (type: "info" | "success" | "warning" | "error" | "system", message: string) => {
@@ -109,21 +119,32 @@ export default function PresenterPage() {
       addLog("error", "Sign the game creation message first");
       return;
     }
+    if (presenterStake < 546) {
+      addLog("error", "Stake must be at least 546 sats (dust limit)");
+      return;
+    }
 
     try {
+      // Fetch the presenter's own spendable UTXO — this becomes input #0 so a
+      // valid transaction can be built and broadcast even with no players.
+      setIsFetchingUtxo(true);
+      addLog("system", `Fetching presenter UTXO for ${presenterStake.toLocaleString()} sats...`);
+      const utxo = await getSpendableUTXO(walletState.address, presenterStake);
+      setPresenterUtxo(utxo);
+      addLog("success", `Presenter input locked: ${utxo.value.toLocaleString()} sats (${utxo.txid.slice(0, 12)}...#${utxo.vout})`);
+
       addLog("system", "Initializing entropy field...");
       const newSession = await initializeGame();
       addLog("success", `Game created: ${newSession.id.toUpperCase()}`);
-      if (opReturnMessage.trim()) {
-        addLog("info", `OP_RETURN: "${opReturnMessage.trim()}"`);
-      }
       addLog("info", "Escrow address: presenter wallet (Tx 1)");
       setMode("game");
       longPulse();
       // Auto-open lobby
       addLog("system", "Opening lobby automatically...");
     } catch (err) {
-      addLog("error", `Initialization failed: ${err}`);
+      addLog("error", `Initialization failed: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setIsFetchingUtxo(false);
     }
   };
 
@@ -372,13 +393,49 @@ export default function PresenterPage() {
               )}
             </div>
 
+            {/* Presenter stake — first input of the transaction */}
+            {walletState?.connected && (
+              <div className="space-y-2">
+                <label className="font-mono text-xs text-neon uppercase">
+                  Your stake (input #0)
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={presenterStakeStr}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/\D/g, "");
+                    setPresenterStakeStr(raw);
+                    const parsed = parseInt(raw, 10);
+                    setPresenterStake(isNaN(parsed) ? 0 : parsed);
+                  }}
+                  onBlur={() => {
+                    if (!presenterStakeStr || parseInt(presenterStakeStr, 10) < 546) {
+                      setPresenterStakeStr("10000");
+                      setPresenterStake(10000);
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-neon focus:outline-none focus:border-neon"
+                />
+                <p className="font-mono text-[10px] text-muted-foreground leading-relaxed">
+                  The sats you commit from your own wallet. This single input lets
+                  you build and broadcast a transaction even with no players.
+                </p>
+              </div>
+            )}
+
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing || !walletState?.signature}
+              disabled={isInitializing || isFetchingUtxo || !walletState?.signature || presenterStake < 546}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
-              {isInitializing ? "INITIALIZING..." : "START GAME"}
+              {isFetchingUtxo
+                ? "FETCHING UTXO..."
+                : isInitializing
+                ? "INITIALIZING..."
+                : "START GAME"}
             </Button>
 
             {!walletState?.signature && walletState?.connected && (

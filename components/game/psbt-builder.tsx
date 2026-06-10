@@ -11,11 +11,14 @@ import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { Player } from "@/lib/game/types";
+import { signPlayerPsbt } from "@/lib/bitcoin/sats-connect";
+import type { Player, UTXO } from "@/lib/game/types";
 
 interface PsbtBuilderProps {
   players: Player[];
   presenterAddress: string;
+  /** Presenter's own UTXO — always input #0 so a tx can exist with no players. */
+  presenterUtxo: UTXO | null;
   feeRate: number;
   /** OP_RETURN text set by the presenter at game creation — always embedded. */
   opReturnText: string;
@@ -38,6 +41,7 @@ interface BuildState {
 export function PsbtBuilder({
   players,
   presenterAddress,
+  presenterUtxo,
   feeRate,
   opReturnText,
   onPsbtBuilt,
@@ -46,12 +50,29 @@ export function PsbtBuilder({
   const [buildState, setBuildState] = useState<BuildState | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [presenterSigned, setPresenterSigned] = useState(false);
   const [step, setStep] = useState<
     "build" | "inspect" | "finalize" | "broadcast"
   >("build");
   // OP_RETURN is entered just before finalize, at the end of the presentation.
   // The field is seeded from the prop (empty until the presenter fills it in).
   const [opReturnLocal, setOpReturnLocal] = useState(opReturnText ?? "");
+
+  // The inputs of the transaction: presenter first (input #0), then players.
+  const playerInputs = players.filter((p) => p.utxo);
+  const buildPayload = useCallback(
+    (opReturn?: string) => ({
+      action: "build" as const,
+      players: [
+        ...(presenterUtxo ? [{ utxo: presenterUtxo }] : []),
+        ...playerInputs.map((p) => ({ utxo: p.utxo })),
+      ],
+      escrowAddress: presenterAddress,
+      feeRate,
+      opReturnData: opReturn?.trim() || undefined,
+    }),
+    [presenterUtxo, playerInputs, presenterAddress, feeRate]
+  );
 
   // --- Build the initial PSBT ---
   const handleBuild = useCallback(async () => {
@@ -61,13 +82,7 @@ export function PsbtBuilder({
       const res = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "build",
-          players: players.map((p) => ({ utxo: p.utxo })),
-          escrowAddress: presenterAddress,
-          feeRate,
-          opReturnData: opReturnLocal.trim() || undefined,
-        }),
+        body: JSON.stringify(buildPayload(opReturnLocal)),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -96,13 +111,31 @@ export function PsbtBuilder({
       });
 
       onPsbtBuilt(result.psbtBase64);
+      setPresenterSigned(false);
       setStep("inspect");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsBusy(false);
     }
-  }, [players, presenterAddress, feeRate, opReturnLocal, onPsbtBuilt]);
+  }, [buildPayload, opReturnLocal, onPsbtBuilt]);
+
+  // --- Presenter signs their own input (#0) ---
+  const handlePresenterSign = useCallback(async () => {
+    if (!buildState?.psbtBase64) return;
+    setError(null);
+    setIsBusy(true);
+    try {
+      // Presenter's input is always index 0.
+      const signed = await signPlayerPsbt(buildState.psbtBase64, presenterAddress, 0);
+      setBuildState((prev) => (prev ? { ...prev, psbtBase64: signed } : prev));
+      setPresenterSigned(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }, [buildState, presenterAddress]);
 
   // --- Finalize: (optionally rebuild with OP_RETURN) combine sigs, extract tx ---
   const handleFinalize = useCallback(async () => {
@@ -110,34 +143,18 @@ export function PsbtBuilder({
     setError(null);
     setIsBusy(true);
     try {
-      // If the presenter added an OP_RETURN message after the initial build,
-      // rebuild first so the message is embedded before we collect signatures.
-      let basePsbt = buildState.psbtBase64;
-      if (opReturnLocal.trim() && !buildState.hasOpReturn) {
-        const rebuildRes = await fetch("/api/psbt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "build",
-            players: players.map((p) => ({ utxo: p.utxo })),
-            escrowAddress: presenterAddress,
-            feeRate,
-            opReturnData: opReturnLocal.trim(),
-          }),
-        });
-        const rebuildData = await rebuildRes.json();
-        if (!rebuildData.success) throw new Error(rebuildData.error);
-        basePsbt = rebuildData.data.psbtBase64;
-      }
+      // The presenter must have signed their own input (#0) first.
+      // buildState.psbtBase64 already contains the presenter's signature.
+      const presenterSignedPsbt = buildState.psbtBase64;
 
       const signedFragments = players
         .map((p) => p.signedPsbt)
         .filter((s): s is string => Boolean(s));
 
-      // Combine base PSBT + all signed fragments (if any)
-      let combinedBase64 = basePsbt;
+      // Combine the presenter-signed PSBT with all player fragments.
+      let combinedBase64 = presenterSignedPsbt;
       if (signedFragments.length > 0) {
-        const allPsbts = [buildState.psbtBase64, ...signedFragments];
+        const allPsbts = [presenterSignedPsbt, ...signedFragments];
         const combineRes = await fetch("/api/psbt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -168,7 +185,7 @@ export function PsbtBuilder({
     } finally {
       setIsBusy(false);
     }
-  }, [buildState, players, presenterAddress, feeRate, opReturnLocal, onFinalized]);
+  }, [buildState, players, onFinalized]);
 
   const playersWithUtxo = players.filter((p) => p.utxo);
   const signedCount = players.filter((p) => p.signedPsbt).length;
