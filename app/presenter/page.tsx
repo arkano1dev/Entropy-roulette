@@ -525,34 +525,44 @@ export default function PresenterPage() {
           {/* Spacer to push contact info to the bottom */}
           <div className="flex-1" />
 
-          {/* Creator / project contact — placeholder, to be filled in later */}
-          <div className="p-4 border-t border-border mt-auto">
+          {/* Creator contact buttons */}
+          <div className="p-4 border-t border-border mt-auto space-y-2">
             <div className="font-mono text-[10px] text-muted-foreground uppercase mb-2">
               Created by
             </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-neon w-16 flex-shrink-0">NOSTR</span>
-                {/* TODO: add creator nostr npub here */}
-                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
-                  coming soon
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-neon w-16 flex-shrink-0">TELEGRAM</span>
-                {/* TODO: add creator telegram handle here */}
-                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
-                  coming soon
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-neon w-16 flex-shrink-0">GITHUB</span>
-                {/* TODO: add project github repo here */}
-                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
-                  coming soon
-                </span>
-              </div>
-            </div>
+            <a
+              href="https://njump.me/npub1p2x3t3njq44vsk24qjkauzurvfd59c224qyu2mpgu9jverk9tfrqnz0ql5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 w-full px-3 py-2 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 transition-colors group"
+            >
+              <span className="font-mono text-[10px] text-neon uppercase w-16 flex-shrink-0">NOSTR</span>
+              <span className="font-mono text-[10px] text-muted-foreground group-hover:text-foreground truncate">
+                npub1p2x3t…
+              </span>
+            </a>
+            <a
+              href="https://t.me/arkano21"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 w-full px-3 py-2 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 transition-colors group"
+            >
+              <span className="font-mono text-[10px] text-neon uppercase w-16 flex-shrink-0">TELEGRAM</span>
+              <span className="font-mono text-[10px] text-muted-foreground group-hover:text-foreground truncate">
+                @arkano21
+              </span>
+            </a>
+            <a
+              href="https://github.com/arkano1dev/v0-entropy-roulette"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 w-full px-3 py-2 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 transition-colors group"
+            >
+              <span className="font-mono text-[10px] text-neon uppercase w-16 flex-shrink-0">GITHUB</span>
+              <span className="font-mono text-[10px] text-muted-foreground group-hover:text-foreground truncate">
+                arkano1dev/v0-entropy-roulette
+              </span>
+            </a>
           </div>
         </div>
 
