@@ -72,6 +72,55 @@ function ScrollPage({ onReady }: { onReady: () => void }) {
             A live Bitcoin game where you sign a real PSBT on mainnet. One
             transaction. Many signers. One winner chosen by the blockchain.
           </p>
+
+          {/* Under-development disclaimer */}
+          <div className="p-4 bg-glitch/10 border border-glitch/40 rounded-lg text-left">
+            <div className="font-mono text-xs text-glitch uppercase mb-1">
+              Under development
+            </div>
+            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+              This app is a live demo presented at Bitcoin events. Full
+              player participation is not yet enabled — you can explore the
+              game flow and sign at your own discretion, but treat everything
+              here as experimental. If you have questions or want to follow the
+              project, find the creator below.
+            </p>
+          </div>
+
+          {/* Creator contact — visible before anything is signed */}
+          <div className="space-y-2 w-full text-left">
+            <div className="font-mono text-[10px] text-muted-foreground uppercase">
+              Created by
+            </div>
+            <a
+              href="https://njump.me/npub1p2x3t3njq44vsk24qjkauzurvfd59c224qyu2mpgu9jverk9tfrqnz0ql5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+            >
+              <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">NOSTR</span>
+              <span className="font-mono text-xs text-muted-foreground truncate">npub1p2x3t3njq44v…</span>
+            </a>
+            <a
+              href="https://t.me/arkano21"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+            >
+              <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">TELEGRAM</span>
+              <span className="font-mono text-xs text-muted-foreground truncate">@arkano21</span>
+            </a>
+            <a
+              href="https://github.com/arkano1dev/v0-entropy-roulette"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+            >
+              <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">GITHUB</span>
+              <span className="font-mono text-xs text-muted-foreground truncate">arkano1dev/v0-entropy-roulette</span>
+            </a>
+          </div>
+
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <span className="font-mono text-xs">Scroll to learn how it works</span>
             <ChevronDown className="w-4 h-4 animate-bounce" />
@@ -235,14 +284,58 @@ function ScrollPage({ onReady }: { onReady: () => void }) {
           </p>
         </div>
 
+        {/* Under-development reminder just before the CTA */}
+        <div className="p-3 bg-glitch/10 border border-glitch/40 rounded-lg">
+          <div className="font-mono text-xs text-glitch mb-1 uppercase">
+            Experimental — under development
+          </div>
+          <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+            The full game flow is not yet live. Proceeding lets you explore
+            the signing flow at your own risk. Not comfortable? Reach out
+            instead.
+          </p>
+        </div>
+
+        {/* Contact before proceeding */}
+        <div className="space-y-2">
+          <a
+            href="https://njump.me/npub1p2x3t3njq44vsk24qjkauzurvfd59c224qyu2mpgu9jverk9tfrqnz0ql5"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+          >
+            <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">NOSTR</span>
+            <span className="font-mono text-xs text-muted-foreground truncate">npub1p2x3t3njq44v…</span>
+          </a>
+          <a
+            href="https://t.me/arkano21"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+          >
+            <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">TELEGRAM</span>
+            <span className="font-mono text-xs text-muted-foreground truncate">@arkano21</span>
+          </a>
+          <a
+            href="https://github.com/arkano1dev/v0-entropy-roulette"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 w-full px-4 py-3 bg-neon/10 border border-neon/30 rounded-lg hover:bg-neon/20 active:scale-95 transition-all"
+          >
+            <span className="font-mono text-xs text-neon uppercase w-20 flex-shrink-0">GITHUB</span>
+            <span className="font-mono text-xs text-muted-foreground truncate">arkano1dev/v0-entropy-roulette</span>
+          </a>
+        </div>
+
         {/* CTA */}
-        <div className="pt-4">
+        <div className="pt-2">
           <Button
             onClick={onReady}
-            className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-6 text-base"
+            variant="outline"
+            className="w-full font-mono py-6 text-base border-border text-muted-foreground hover:text-foreground"
             size="lg"
           >
-            I understand — choose my wallet
+            Explore the signing flow anyway
           </Button>
         </div>
       </ScrollSection>
