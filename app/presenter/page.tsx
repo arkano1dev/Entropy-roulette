@@ -504,28 +504,16 @@ export default function PresenterPage() {
       {/* Main 3-column layout */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* LEFT COLUMN: QR + education panel */}
+        {/* LEFT COLUMN: QR only */}
         <div className="w-72 flex-shrink-0 flex flex-col border-r border-border overflow-y-auto">
 
-          {/* QR block — prominent */}
-          <div className="p-4 border-b border-border">
-            <div className="bg-white rounded-lg p-3 mb-3">
-              <QRCodeSVG value={getJoinUrl()} size={220} level="M" className="w-full h-auto" />
+          {/* QR block — prominent, the only thing players need to scan */}
+          <div className="p-5 border-b border-border">
+            <div className="bg-white rounded-lg p-4 mb-3">
+              <QRCodeSVG value={getJoinUrl()} size={240} level="M" className="w-full h-auto" />
             </div>
             <div className="text-center space-y-2">
-              <p className="font-mono text-xs text-muted-foreground">
-                Scan to join the game
-              </p>
-              {session && (
-                <div className="p-2 bg-neon/10 border border-neon/30 rounded-lg">
-                  <div className="font-mono text-3xl text-neon leading-none">
-                    {session.players.length}
-                  </div>
-                  <div className="font-mono text-xs text-muted-foreground mt-0.5">
-                    {session.players.length === 1 ? "player" : "players"} joined
-                  </div>
-                </div>
-              )}
+              <p className="font-mono text-sm text-neon">Scan to join the game</p>
               <div className="font-mono text-[10px] text-muted-foreground break-all leading-relaxed">
                 {typeof window !== "undefined"
                   ? `${window.location.origin}/player?game=${session?.id}`
@@ -534,47 +522,36 @@ export default function PresenterPage() {
             </div>
           </div>
 
-          {/* OP_RETURN — editable until PSBT is built */}
-          <div className="px-4 py-3 border-b border-border">
-            <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1.5">
-              OP_RETURN (on-chain)
-            </div>
-            {session?.phase === "LOBBY_OPEN" || session?.phase === "IDLE" || session?.phase === "LOBBY_CLOSED" ? (
-              <>
-                <input
-                  type="text"
-                  maxLength={80}
-                  value={opReturnMessage}
-                  onChange={(e) => setOpReturnMessage(e.target.value)}
-                  placeholder="Set message before building PSBT..."
-                  className="w-full px-2 py-1.5 bg-muted/20 border border-border rounded font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
-                />
-                <div className="flex justify-between font-mono text-[10px] text-muted-foreground mt-1">
-                  <span>Optional — embedded in Tx 1</span>
-                  <span className={opReturnMessage.length > 80 ? "text-glitch" : ""}>{opReturnMessage.length}/80</span>
-                </div>
-              </>
-            ) : (
-              <div className="font-mono text-xs text-neon break-all leading-relaxed">
-                {opReturnMessage.trim() || <span className="text-muted-foreground italic">none</span>}
-              </div>
-            )}
-          </div>
-
-          {/* Spacer to push supported wallets to the bottom */}
+          {/* Spacer to push contact info to the bottom */}
           <div className="flex-1" />
 
-          {/* Supported wallets */}
+          {/* Creator / project contact — placeholder, to be filled in later */}
           <div className="p-4 border-t border-border mt-auto">
             <div className="font-mono text-[10px] text-muted-foreground uppercase mb-2">
-              Supported wallets
+              Created by
             </div>
-            <div className="grid grid-cols-3 gap-1">
-              {["Xverse", "Unisat", "Leather", "Alby", "Sparrow", "BlueWallet"].map((w) => (
-                <div key={w} className="font-mono text-[10px] text-neon px-1.5 py-1 bg-neon/5 rounded text-center">
-                  {w}
-                </div>
-              ))}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-neon w-16 flex-shrink-0">NOSTR</span>
+                {/* TODO: add creator nostr npub here */}
+                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
+                  coming soon
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-neon w-16 flex-shrink-0">TELEGRAM</span>
+                {/* TODO: add creator telegram handle here */}
+                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
+                  coming soon
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-neon w-16 flex-shrink-0">GITHUB</span>
+                {/* TODO: add project github repo here */}
+                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">
+                  coming soon
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -588,9 +565,9 @@ export default function PresenterPage() {
               <TabsTrigger value="inspect" className="font-mono text-xs">INSPECT</TabsTrigger>
             </TabsList>
 
-            {/* Slides take center stage for the audience */}
-            <TabsContent value="slides" className="flex-1 overflow-auto p-6">
-              <div className="max-w-3xl mx-auto h-full flex items-center">
+            {/* Slides take center stage for the audience — use the full space */}
+            <TabsContent value="slides" className="flex-1 overflow-auto p-8">
+              <div className="max-w-5xl w-full mx-auto h-full flex items-center">
                 <div className="w-full">
                   <EducationalSlides variant="presenter" showControls={true} />
                 </div>
@@ -613,7 +590,21 @@ export default function PresenterPage() {
                     onFinalized={(rawTx, finalTxid) => {
                       setTxid(finalTxid);
                       setRawTxCache(rawTx);
+                      // Advance the shared game phase so all surfaces reflect
+                      // that the PSBT is finalized and ready to broadcast.
+                      setFinalizedPsbt(rawTx, finalTxid).catch(() => {});
                       addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+                      longPulse();
+                    }}
+                    onBroadcasted={(broadcastTxid) => {
+                      setTxid(broadcastTxid);
+                      setRawTxCache(null);
+                      // Transition the game into the BROADCAST phase and begin
+                      // polling mempool.space for confirmation.
+                      broadcastTx(broadcastTxid).catch(() => {});
+                      setIsPolling(true);
+                      addLog("success", `Tx 1 broadcast! TXID: ${broadcastTxid.slice(0, 16)}...`);
+                      addLog("info", "Waiting for block confirmation...");
                       longPulse();
                     }}
                   />
