@@ -15,13 +15,14 @@ import {
   getFeeEstimates,
   getBlockHeight,
   getTransactionStatus,
+  getSpendableUTXO,
+  type SpendableUTXO,
 } from "@/lib/bitcoin/mempool-api";
 import {
   calculateWinner,
 } from "@/lib/bitcoin/psbt-engine";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { ChevronDown, ChevronUp } from "lucide-react";
 
 type PresenterMode = "setup" | "game";
 
@@ -59,9 +60,6 @@ export default function PresenterPage() {
   const [payoutTxid, setPayoutTxid] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
 
-  // Whether the education panel (below QR) is expanded
-  const [educationOpen, setEducationOpen] = useState(true);
-
   // Wallet state
   const [walletState, setWalletState] = useState<PresenterWalletState | undefined>(undefined);
 
@@ -71,6 +69,14 @@ export default function PresenterPage() {
 
   // OP_RETURN message — set in the game view before building the PSBT
   const [opReturnMessage, setOpReturnMessage] = useState("");
+
+  // Presenter self-stake — the presenter's own UTXO is the FIRST input of the
+  // transaction. This makes a PSBT possible with zero players: presenter alone
+  // can build → sign → broadcast to demonstrate writing to the blockchain.
+  const [presenterStake, setPresenterStake] = useState(10000);
+  const [presenterStakeStr, setPresenterStakeStr] = useState("10000");
+  const [presenterUtxo, setPresenterUtxo] = useState<SpendableUTXO | null>(null);
+  const [isFetchingUtxo, setIsFetchingUtxo] = useState(false);
 
   // Add log entry
   const addLog = useCallback(
@@ -109,21 +115,32 @@ export default function PresenterPage() {
       addLog("error", "Sign the game creation message first");
       return;
     }
+    if (presenterStake < 546) {
+      addLog("error", "Stake must be at least 546 sats (dust limit)");
+      return;
+    }
 
     try {
+      // Fetch the presenter's own spendable UTXO — this becomes input #0 so a
+      // valid transaction can be built and broadcast even with no players.
+      setIsFetchingUtxo(true);
+      addLog("system", `Fetching presenter UTXO for ${presenterStake.toLocaleString()} sats...`);
+      const utxo = await getSpendableUTXO(walletState.address, presenterStake);
+      setPresenterUtxo(utxo);
+      addLog("success", `Presenter input locked: ${utxo.value.toLocaleString()} sats (${utxo.txid.slice(0, 12)}...#${utxo.vout})`);
+
       addLog("system", "Initializing entropy field...");
       const newSession = await initializeGame();
       addLog("success", `Game created: ${newSession.id.toUpperCase()}`);
-      if (opReturnMessage.trim()) {
-        addLog("info", `OP_RETURN: "${opReturnMessage.trim()}"`);
-      }
       addLog("info", "Escrow address: presenter wallet (Tx 1)");
       setMode("game");
       longPulse();
       // Auto-open lobby
       addLog("system", "Opening lobby automatically...");
     } catch (err) {
-      addLog("error", `Initialization failed: ${err}`);
+      addLog("error", `Initialization failed: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setIsFetchingUtxo(false);
     }
   };
 
@@ -372,13 +389,49 @@ export default function PresenterPage() {
               )}
             </div>
 
+            {/* Presenter stake — first input of the transaction */}
+            {walletState?.connected && (
+              <div className="space-y-2">
+                <label className="font-mono text-xs text-neon uppercase">
+                  Your stake (input #0)
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={presenterStakeStr}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/\D/g, "");
+                    setPresenterStakeStr(raw);
+                    const parsed = parseInt(raw, 10);
+                    setPresenterStake(isNaN(parsed) ? 0 : parsed);
+                  }}
+                  onBlur={() => {
+                    if (!presenterStakeStr || parseInt(presenterStakeStr, 10) < 546) {
+                      setPresenterStakeStr("10000");
+                      setPresenterStake(10000);
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-neon focus:outline-none focus:border-neon"
+                />
+                <p className="font-mono text-[10px] text-muted-foreground leading-relaxed">
+                  The sats you commit from your own wallet. This single input lets
+                  you build and broadcast a transaction even with no players.
+                </p>
+              </div>
+            )}
+
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing || !walletState?.signature}
+              disabled={isInitializing || isFetchingUtxo || !walletState?.signature || presenterStake < 546}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
-              {isInitializing ? "INITIALIZING..." : "START GAME"}
+              {isFetchingUtxo
+                ? "FETCHING UTXO..."
+                : isInitializing
+                ? "INITIALIZING..."
+                : "START GAME"}
             </Button>
 
             {!walletState?.signature && walletState?.connected && (
@@ -508,32 +561,8 @@ export default function PresenterPage() {
             )}
           </div>
 
-          {/* Education accordion */}
-          <div className="flex-1">
-            <button
-              className="w-full flex items-center justify-between px-4 py-3 border-b border-border font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
-              onClick={() => setEducationOpen((v) => !v)}
-            >
-              <span>PRESENTATION SLIDES</span>
-              {educationOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-            </button>
-
-            <AnimatePresence initial={false}>
-              {educationOpen && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="overflow-hidden"
-                >
-                  <div className="p-3">
-                    <EducationalSlides variant="presenter" showControls={true} />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          {/* Spacer to push supported wallets to the bottom */}
+          <div className="flex-1" />
 
           {/* Supported wallets */}
           <div className="p-4 border-t border-border mt-auto">
@@ -550,32 +579,45 @@ export default function PresenterPage() {
           </div>
         </div>
 
-        {/* CENTER COLUMN: PSBT builder + inspector */}
+        {/* CENTER COLUMN: presentation slides (prominent) + PSBT tools */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <Tabs defaultValue={currentPsbt ? "inspect" : "build"} className="flex flex-col h-full">
-            <TabsList className="mx-3 mt-3 grid grid-cols-2 flex-shrink-0">
+          <Tabs defaultValue="slides" className="flex flex-col h-full">
+            <TabsList className="mx-3 mt-3 grid grid-cols-3 flex-shrink-0">
+              <TabsTrigger value="slides" className="font-mono text-xs">SLIDES</TabsTrigger>
               <TabsTrigger value="build" className="font-mono text-xs">BUILD PSBT</TabsTrigger>
               <TabsTrigger value="inspect" className="font-mono text-xs">INSPECT</TabsTrigger>
             </TabsList>
 
+            {/* Slides take center stage for the audience */}
+            <TabsContent value="slides" className="flex-1 overflow-auto p-6">
+              <div className="max-w-3xl mx-auto h-full flex items-center">
+                <div className="w-full">
+                  <EducationalSlides variant="presenter" showControls={true} />
+                </div>
+              </div>
+            </TabsContent>
+
             <TabsContent value="build" className="flex-1 overflow-auto p-3">
               {session && walletState?.address ? (
-                <PsbtBuilder
-                  players={session.players}
-                  presenterAddress={walletState.address}
-                  feeRate={feeRate}
-                  opReturnText={opReturnMessage.trim()}
-                  onPsbtBuilt={(psbt) => {
-                    setCurrentPsbt(psbt);
-                    addLog("info", "PSBT built — publishing to players for signing");
-                  }}
-                  onFinalized={(rawTx, finalTxid) => {
-                    setTxid(finalTxid);
-                    setRawTxCache(rawTx);
-                    addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
-                    longPulse();
-                  }}
-                />
+                <div className="max-w-2xl mx-auto">
+                  <PsbtBuilder
+                    players={session.players}
+                    presenterAddress={walletState.address}
+                    presenterUtxo={presenterUtxo}
+                    feeRate={feeRate}
+                    opReturnText={opReturnMessage.trim()}
+                    onPsbtBuilt={(psbt) => {
+                      setCurrentPsbt(psbt);
+                      addLog("info", "PSBT built — publishing to players for signing");
+                    }}
+                    onFinalized={(rawTx, finalTxid) => {
+                      setTxid(finalTxid);
+                      setRawTxCache(rawTx);
+                      addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+                      longPulse();
+                    }}
+                  />
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-40">
                   <div className="font-mono text-sm text-muted-foreground">
@@ -587,12 +629,14 @@ export default function PresenterPage() {
 
             <TabsContent value="inspect" className="flex-1 overflow-auto">
               {session && currentPsbt ? (
-                <PSBTInspector
-                  psbtBase64={currentPsbt}
-                  players={session.players}
-                  feeRate={feeRate}
-                  phase={session.phase}
-                />
+                <div className="max-w-2xl mx-auto">
+                  <PSBTInspector
+                    psbtBase64={currentPsbt}
+                    players={session.players}
+                    feeRate={feeRate}
+                    phase={session.phase}
+                  />
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-40">
                   <div className="font-mono text-sm text-muted-foreground">
