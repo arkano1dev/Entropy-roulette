@@ -69,9 +69,8 @@ export default function PresenterPage() {
   const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
   const [rawTxCache, setRawTxCache] = useState<string | null>(null);
 
-  // OP_RETURN message — optional at setup; can be set/changed until lobby closes
+  // OP_RETURN message — set in the game view before building the PSBT
   const [opReturnMessage, setOpReturnMessage] = useState("");
-  const opReturnValid = opReturnMessage.length === 0 || opReturnMessage.length <= 80;
 
   // Add log entry
   const addLog = useCallback(
@@ -153,6 +152,13 @@ export default function PresenterPage() {
     try {
       const playersWithUtxo = session.players.filter((p) => p.utxo);
 
+      if (playersWithUtxo.length === 0) {
+        addLog(
+          "error",
+          "No player inputs yet — players must confirm a bet (which fetches their UTXO) before you can build."
+        );
+        return;
+      }
       // Build escrow PSBT via real API route
       const res = await fetch("/api/psbt", {
         method: "POST",
@@ -171,7 +177,9 @@ export default function PresenterPage() {
       const escrowPsbt = data.data.psbtBase64;
       setCurrentPsbt(escrowPsbt);
       addLog("info", `PSBT built: ${data.data.inputCount} inputs → escrow`);
-      addLog("info", `OP_RETURN embedded: "${opReturnMessage.trim()}"`);
+      if (opReturnMessage.trim()) {
+        addLog("info", `OP_RETURN embedded: "${opReturnMessage.trim()}"`);
+      }
       addLog("info", `Fee: ${data.data.estimatedFee.toLocaleString()} sats`);
 
       // Publish PSBT to Nostr for players
@@ -350,28 +358,6 @@ export default function PresenterPage() {
               connectedState={walletState}
             />
 
-            {/* OP_RETURN — optional, can be set until PSBT is built */}
-            <div className="space-y-1">
-              <label className="font-mono text-xs text-neon uppercase">
-                OP_RETURN message
-                <span className="text-muted-foreground ml-1 normal-case">(optional)</span>
-              </label>
-              <input
-                type="text"
-                maxLength={80}
-                value={opReturnMessage}
-                onChange={(e) => setOpReturnMessage(e.target.value)}
-                placeholder="e.g. entropy-roulette-btcprague-2025"
-                className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
-              />
-              <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
-                <span>Embedded permanently on-chain in Tx 1. Optional — can be set later.</span>
-                <span className={opReturnMessage.length > 80 ? "text-glitch" : ""}>
-                  {opReturnMessage.length}/80
-                </span>
-              </div>
-            </div>
-
             {/* Network info */}
             <div className="grid grid-cols-2 gap-3">
               <div className="flex items-center justify-between p-3 bg-muted/20 rounded-lg">
@@ -388,7 +374,7 @@ export default function PresenterPage() {
 
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing || !walletState?.signature || !opReturnValid}
+              disabled={isInitializing || !walletState?.signature}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
@@ -684,9 +670,9 @@ export default function PresenterPage() {
 
               <TabsContent value="timing" className="px-3 pb-3 space-y-2">
                 {[
-                  { phase: "Setup & intro", range: "2–5 min", note: "Connect wallet, set OP_RETURN, start game, open lobby." },
+                  { phase: "Setup & intro", range: "2–5 min", note: "Connect wallet, start game, open lobby, explain the rules." },
                   { phase: "Lobby — players join", range: "5–15 min", note: "Scan QR, pick wallet, sign ownership message. More players = more time." },
-                  { phase: "Build PSBT", range: "1 min", note: "Close lobby, build PSBT with all inputs + OP_RETURN." },
+                  { phase: "Build PSBT", range: "1 min", note: "Set OP_RETURN message, then build PSBT with all player inputs." },
                   { phase: "Players sign", range: "2–5 min", note: "Extension wallets: in-browser. Sparrow/BlueWallet: file download." },
                   { phase: "Finalize & broadcast Tx 1", range: "< 1 min", note: "Combine sigs, finalize, broadcast." },
                   { phase: "Confirmation", range: "10–60 min", note: "Depends on fee rate and mempool." },

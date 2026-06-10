@@ -39,6 +39,71 @@ export async function getAddressUTXOs(address: string): Promise<MempoolUTXO[]> {
   return response.json();
 }
 
+// A spendable UTXO enriched with the scriptPubKey needed to build a PSBT input.
+export interface SpendableUTXO {
+  txid: string;
+  vout: number;
+  value: number; // sats
+  scriptPubKey: string; // hex
+}
+
+// Fetch the scriptPubKey (hex) for a specific transaction output.
+export async function getOutputScriptPubKey(
+  txid: string,
+  vout: number
+): Promise<string> {
+  const response = await fetch(`${MEMPOOL_API}/tx/${txid}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tx ${txid}: ${response.statusText}`);
+  }
+  const tx = await response.json();
+  const out = tx?.vout?.[vout];
+  if (!out?.scriptpubkey) {
+    throw new Error(`No scriptPubKey for ${txid}:${vout}`);
+  }
+  return out.scriptpubkey as string;
+}
+
+// Pick the best spendable UTXO for an address that covers `minValue` sats,
+// enriched with its scriptPubKey so it can be added to a PSBT.
+// Prefers confirmed UTXOs and the smallest one that still covers the amount.
+export async function getSpendableUTXO(
+  address: string,
+  minValue: number
+): Promise<SpendableUTXO> {
+  const utxos = await getAddressUTXOs(address);
+  if (!utxos.length) {
+    throw new Error("No UTXOs found for this address. Fund the wallet first.");
+  }
+
+  // Prefer confirmed UTXOs that cover the bet; fall back to any that cover it.
+  const eligible = utxos
+    .filter((u) => u.value >= minValue)
+    .sort((a, b) => {
+      // Confirmed first, then smallest sufficient value.
+      const aConf = a.status.confirmed ? 0 : 1;
+      const bConf = b.status.confirmed ? 0 : 1;
+      if (aConf !== bConf) return aConf - bConf;
+      return a.value - b.value;
+    });
+
+  const chosen = eligible[0];
+  if (!chosen) {
+    const largest = Math.max(...utxos.map((u) => u.value));
+    throw new Error(
+      `No single UTXO covers ${minValue} sats (largest available: ${largest} sats).`
+    );
+  }
+
+  const scriptPubKey = await getOutputScriptPubKey(chosen.txid, chosen.vout);
+  return {
+    txid: chosen.txid,
+    vout: chosen.vout,
+    value: chosen.value,
+    scriptPubKey,
+  };
+}
+
 // Fetch recommended fee rates
 export async function getFeeEstimates(): Promise<FeeEstimates> {
   const response = await fetch(`${MEMPOOL_API}/v1/fees/recommended`);

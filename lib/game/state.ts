@@ -119,7 +119,7 @@ export function transitionPhase(
 ): GameSession {
   const validTransitions: Record<GamePhase, GamePhase[]> = {
     IDLE: ["LOBBY_OPEN"],
-    LOBBY_OPEN: ["LOBBY_CLOSED"],
+    LOBBY_OPEN: ["LOBBY_CLOSED", "COLLECTING_SIGNATURES"],
     LOBBY_CLOSED: ["COLLECTING_SIGNATURES"],
     COLLECTING_SIGNATURES: ["FINALIZED"],
     FINALIZED: ["BROADCAST"],
