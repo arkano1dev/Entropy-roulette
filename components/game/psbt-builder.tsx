@@ -24,6 +24,8 @@ interface PsbtBuilderProps {
   opReturnText: string;
   onPsbtBuilt: (psbtBase64: string) => void;
   onFinalized: (rawTx: string, txid: string) => void;
+  /** Called after the raw tx is successfully broadcast to the Bitcoin network. */
+  onBroadcasted?: (txid: string) => void;
 }
 
 interface BuildState {
@@ -46,14 +48,19 @@ export function PsbtBuilder({
   opReturnText,
   onPsbtBuilt,
   onFinalized,
+  onBroadcasted,
 }: PsbtBuilderProps) {
   const [buildState, setBuildState] = useState<BuildState | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [presenterSigned, setPresenterSigned] = useState(false);
   const [step, setStep] = useState<
-    "build" | "inspect" | "finalize" | "broadcast"
+    "build" | "inspect" | "finalize" | "broadcast" | "done"
   >("build");
+  // The extracted raw transaction hex + its txid, held for broadcasting.
+  const [rawTx, setRawTx] = useState<string | null>(null);
+  const [finalTxid, setFinalTxid] = useState<string | null>(null);
+  const [broadcastTxid, setBroadcastTxid] = useState<string | null>(null);
   // OP_RETURN is entered just before finalize, at the end of the presentation.
   // The field is seeded from the prop (empty until the presenter fills it in).
   const [opReturnLocal, setOpReturnLocal] = useState(opReturnText ?? "");
@@ -178,6 +185,8 @@ export function PsbtBuilder({
       setBuildState((prev) =>
         prev ? { ...prev, psbtBase64: finalData.data.finalizedPsbt } : prev
       );
+      setRawTx(rawTx);
+      setFinalTxid(txid);
       onFinalized(rawTx, txid);
       setStep("broadcast");
     } catch (err) {
@@ -186,6 +195,34 @@ export function PsbtBuilder({
       setIsBusy(false);
     }
   }, [buildState, players, onFinalized]);
+
+  // --- Broadcast: send the raw transaction to the Bitcoin network ---
+  const handleBroadcast = useCallback(async () => {
+    if (!rawTx) {
+      setError("No raw transaction to broadcast — finalize first");
+      return;
+    }
+    setError(null);
+    setIsBusy(true);
+    try {
+      const res = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "broadcast", rawTx }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      const txid = data.data.txid as string;
+      setBroadcastTxid(txid);
+      setStep("done");
+      onBroadcasted?.(txid);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }, [rawTx, onBroadcasted]);
 
   const playersWithUtxo = players.filter((p) => p.utxo);
   const signedCount = players.filter((p) => p.signedPsbt).length;
@@ -444,13 +481,72 @@ export function PsbtBuilder({
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-neon/10 border border-neon/30 rounded-lg p-4 text-center"
+          className="space-y-4"
         >
-          <div className="font-mono text-neon text-lg mb-2">PSBT FINALIZED</div>
-          <p className="font-mono text-xs text-muted-foreground">
-            Raw transaction extracted. Use the broadcast button in the control
-            panel to send it to the Bitcoin network.
-          </p>
+          <div className="bg-neon/10 border border-neon/30 rounded-lg p-4 text-center">
+            <div className="font-mono text-neon text-lg mb-2">PSBT FINALIZED</div>
+            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+              Raw transaction extracted and ready. Broadcast it to write your
+              PSBT to the Bitcoin network.
+            </p>
+          </div>
+
+          {finalTxid && (
+            <div className="bg-muted/20 border border-border rounded-lg p-3">
+              <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
+                Transaction ID
+              </div>
+              <div className="font-mono text-xs text-neon break-all">{finalTxid}</div>
+            </div>
+          )}
+
+          <Button
+            onClick={handleBroadcast}
+            disabled={isBusy || !rawTx}
+            className="w-full bg-neon text-background hover:bg-neon/80 font-mono animate-pulse disabled:animate-none"
+            size="lg"
+          >
+            {isBusy ? "BROADCASTING..." : "BROADCAST TO BITCOIN NETWORK"}
+          </Button>
+        </motion.div>
+      )}
+
+      {step === "done" && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="space-y-4"
+        >
+          <div className="bg-neon/10 border border-neon/30 rounded-lg p-4 text-center">
+            <div className="font-mono text-neon text-lg mb-2">
+              BROADCAST CONFIRMED
+            </div>
+            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+              Your transaction is now in the mempool, propagating across the
+              Bitcoin network. It will confirm in an upcoming block.
+            </p>
+          </div>
+
+          {broadcastTxid && (
+            <div className="bg-muted/20 border border-border rounded-lg p-3 space-y-2">
+              <div>
+                <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
+                  Transaction ID
+                </div>
+                <div className="font-mono text-xs text-neon break-all">
+                  {broadcastTxid}
+                </div>
+              </div>
+              <a
+                href={`https://mempool.space/tx/${broadcastTxid}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block font-mono text-xs text-memphis underline hover:text-memphis/80"
+              >
+                View on mempool.space →
+              </a>
+            </div>
+          )}
         </motion.div>
       )}
 
