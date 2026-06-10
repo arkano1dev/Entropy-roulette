@@ -366,6 +366,8 @@ interface EducationalSlidesProps {
   variant?: "player" | "presenter";
   onComplete?: () => void;
   showControls?: boolean;
+  /** Extra classes on the root wrapper — use to override max-width or add height. */
+  className?: string;
 }
 
 export function EducationalSlides({
@@ -373,6 +375,7 @@ export function EducationalSlides({
   variant = "player",
   onComplete,
   showControls = true,
+  className,
 }: EducationalSlidesProps) {
   const slideSet =
     slides ||
@@ -399,25 +402,25 @@ export function EducationalSlides({
   const currentSlide = slideSet[currentIndex];
 
   return (
-    <div className="w-full max-w-2xl mx-auto">
+    <div className={`w-full flex flex-col ${className ?? "max-w-2xl mx-auto"}`}>
       {/* Progress dots */}
-      <div className="flex justify-center gap-2 mb-6">
+      <div className="flex justify-center gap-2 mb-4 flex-shrink-0">
         {slideSet.map((slide, i) => (
           <button
             key={slide.id}
             onClick={() => setCurrentIndex(i)}
-            className={`w-2 h-2 rounded-full transition-all ${
+            className={`h-2 rounded-full transition-all ${
               i === currentIndex
                 ? "bg-neon w-6"
                 : i < currentIndex
-                  ? "bg-neon/50"
-                  : "bg-muted"
+                  ? "bg-neon/50 w-2"
+                  : "bg-muted w-2"
             }`}
           />
         ))}
       </div>
 
-      {/* Slide content */}
+      {/* Slide content — flex-1 so it fills remaining vertical space */}
       <AnimatePresence mode="wait">
         <motion.div
           key={currentSlide.id}
@@ -425,17 +428,17 @@ export function EducationalSlides({
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
           transition={{ duration: 0.3 }}
-          className="bg-card border border-border rounded-lg p-6"
+          className="flex-1 bg-card border border-border rounded-lg p-8 flex flex-col overflow-auto"
         >
-          <h2 className="font-mono text-xl text-neon mb-1">
+          <h2 className="font-mono text-2xl text-neon mb-1 flex-shrink-0">
             {currentSlide.title}
           </h2>
           {currentSlide.subtitle && (
-            <p className="font-mono text-sm text-muted-foreground mb-6">
+            <p className="font-mono text-base text-muted-foreground mb-6 flex-shrink-0">
               {currentSlide.subtitle}
             </p>
           )}
-          <div className="font-mono text-sm text-foreground leading-relaxed">
+          <div className="font-mono text-sm text-foreground leading-relaxed flex-1">
             {currentSlide.content}
           </div>
         </motion.div>
@@ -443,7 +446,7 @@ export function EducationalSlides({
 
       {/* Navigation */}
       {showControls && (
-        <div className="flex justify-between items-center mt-6">
+        <div className="flex justify-between items-center mt-4 flex-shrink-0">
           <Button
             variant="outline"
             onClick={handlePrev}

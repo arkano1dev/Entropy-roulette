@@ -565,13 +565,13 @@ export default function PresenterPage() {
               <TabsTrigger value="inspect" className="font-mono text-xs">INSPECT</TabsTrigger>
             </TabsList>
 
-            {/* Slides take center stage for the audience — use the full space */}
-            <TabsContent value="slides" className="flex-1 overflow-auto p-8">
-              <div className="max-w-5xl w-full mx-auto h-full flex items-center">
-                <div className="w-full">
-                  <EducationalSlides variant="presenter" showControls={true} />
-                </div>
-              </div>
+            {/* Slides take center stage — full width, full height, no centering wrapper */}
+            <TabsContent value="slides" className="flex-1 overflow-hidden p-4 flex flex-col">
+              <EducationalSlides
+                variant="presenter"
+                showControls={true}
+                className="w-full h-full"
+              />
             </TabsContent>
 
             <TabsContent value="build" className="flex-1 overflow-auto p-3">
