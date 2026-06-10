@@ -49,6 +49,9 @@ export function PsbtBuilder({
   const [step, setStep] = useState<
     "build" | "inspect" | "finalize" | "broadcast"
   >("build");
+  // OP_RETURN is entered just before finalize, at the end of the presentation.
+  // The field is seeded from the prop (empty until the presenter fills it in).
+  const [opReturnLocal, setOpReturnLocal] = useState(opReturnText ?? "");
 
   // --- Build the initial PSBT ---
   const handleBuild = useCallback(async () => {
@@ -63,7 +66,7 @@ export function PsbtBuilder({
           players: players.map((p) => ({ utxo: p.utxo })),
           escrowAddress: presenterAddress,
           feeRate,
-          opReturnData: opReturnText.trim() || undefined,
+          opReturnData: opReturnLocal.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -99,20 +102,40 @@ export function PsbtBuilder({
     } finally {
       setIsBusy(false);
     }
-  }, [players, presenterAddress, feeRate, opReturnText, onPsbtBuilt]);
+  }, [players, presenterAddress, feeRate, opReturnLocal, onPsbtBuilt]);
 
-  // --- Finalize: combine available signed fragments, then extract raw tx ---
+  // --- Finalize: (optionally rebuild with OP_RETURN) combine sigs, extract tx ---
   const handleFinalize = useCallback(async () => {
     if (!buildState?.psbtBase64) return;
     setError(null);
     setIsBusy(true);
     try {
+      // If the presenter added an OP_RETURN message after the initial build,
+      // rebuild first so the message is embedded before we collect signatures.
+      let basePsbt = buildState.psbtBase64;
+      if (opReturnLocal.trim() && !buildState.hasOpReturn) {
+        const rebuildRes = await fetch("/api/psbt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "build",
+            players: players.map((p) => ({ utxo: p.utxo })),
+            escrowAddress: presenterAddress,
+            feeRate,
+            opReturnData: opReturnLocal.trim(),
+          }),
+        });
+        const rebuildData = await rebuildRes.json();
+        if (!rebuildData.success) throw new Error(rebuildData.error);
+        basePsbt = rebuildData.data.psbtBase64;
+      }
+
       const signedFragments = players
         .map((p) => p.signedPsbt)
         .filter((s): s is string => Boolean(s));
 
       // Combine base PSBT + all signed fragments (if any)
-      let combinedBase64 = buildState.psbtBase64;
+      let combinedBase64 = basePsbt;
       if (signedFragments.length > 0) {
         const allPsbts = [buildState.psbtBase64, ...signedFragments];
         const combineRes = await fetch("/api/psbt", {
@@ -145,7 +168,7 @@ export function PsbtBuilder({
     } finally {
       setIsBusy(false);
     }
-  }, [buildState, players, onFinalized]);
+  }, [buildState, players, presenterAddress, feeRate, opReturnLocal, onFinalized]);
 
   const playersWithUtxo = players.filter((p) => p.utxo);
   const signedCount = players.filter((p) => p.signedPsbt).length;
@@ -160,16 +183,6 @@ export function PsbtBuilder({
           animate={{ opacity: 1, y: 0 }}
           className="space-y-4"
         >
-          {/* OP_RETURN — read-only, set at game creation */}
-          <div className="bg-neon/5 border border-neon/20 rounded-lg p-3">
-            <div className="font-mono text-[10px] text-muted-foreground uppercase mb-1">
-              OP_RETURN (set at game creation)
-            </div>
-            <div className="font-mono text-xs text-neon break-all leading-relaxed">
-              {opReturnText || <span className="text-muted-foreground italic">none</span>}
-            </div>
-          </div>
-
           {/* Player inputs summary */}
           <div className="bg-muted/20 border border-border rounded-lg p-4">
             <div className="font-mono text-sm text-neon mb-3">INPUTS</div>
@@ -320,6 +333,31 @@ export function PsbtBuilder({
             </div>
           </div>
 
+          {/* OP_RETURN — set here, at the end of the presentation */}
+          <div className="space-y-1">
+            <label className="font-mono text-xs text-neon uppercase">
+              OP_RETURN message
+              <span className="text-muted-foreground ml-1 font-normal normal-case">(optional — set before finalizing)</span>
+            </label>
+            <input
+              type="text"
+              maxLength={80}
+              value={opReturnLocal}
+              onChange={(e) => setOpReturnLocal(e.target.value)}
+              placeholder="e.g. entropy-roulette-btcprague-2025"
+              className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
+            />
+            <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+              <span>Embedded permanently on-chain in Tx 1</span>
+              <span className={opReturnLocal.length > 80 ? "text-glitch" : ""}>{opReturnLocal.length}/80</span>
+            </div>
+            {opReturnLocal.trim() && (
+              <p className="font-mono text-[10px] text-neon/70 leading-relaxed">
+                PSBT will be rebuilt with this message before finalizing.
+              </p>
+            )}
+          </div>
+
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -333,13 +371,13 @@ export function PsbtBuilder({
             </Button>
             <Button
               onClick={handleFinalize}
-              disabled={isBusy || !allSigned}
+              disabled={isBusy || !allSigned || opReturnLocal.length > 80}
               className="flex-1 bg-neon text-background hover:bg-neon/80 font-mono disabled:opacity-50"
             >
               {isBusy
                 ? "FINALIZING..."
                 : allSigned
-                ? "FINALIZE & EXTRACT TX"
+                ? "FINALIZE & BROADCAST"
                 : `WAITING (${signedCount}/${players.length})`}
             </Button>
           </div>
