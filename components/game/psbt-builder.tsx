@@ -189,7 +189,11 @@ export function PsbtBuilder({
 
   const playersWithUtxo = players.filter((p) => p.utxo);
   const signedCount = players.filter((p) => p.signedPsbt).length;
-  const allSigned = signedCount === players.length && players.length > 0;
+  const allPlayersSigned = signedCount === playersWithUtxo.length;
+  // Ready to finalize once the presenter has signed input #0 and every player
+  // that joined with a UTXO has signed (zero players is allowed).
+  const readyToFinalize = presenterSigned && allPlayersSigned;
+  const totalInputs = (presenterUtxo ? 1 : 0) + playersWithUtxo.length;
 
   return (
     <div className="space-y-4">
@@ -200,30 +204,44 @@ export function PsbtBuilder({
           animate={{ opacity: 1, y: 0 }}
           className="space-y-4"
         >
-          {/* Player inputs summary */}
+          {/* Inputs summary — presenter is always input #0 */}
           <div className="bg-muted/20 border border-border rounded-lg p-4">
-            <div className="font-mono text-sm text-neon mb-3">INPUTS</div>
-            {playersWithUtxo.length === 0 ? (
-              <p className="font-mono text-xs text-muted-foreground">
-                No players have UTXOs yet
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {playersWithUtxo.map((p) => (
+            <div className="font-mono text-sm text-neon mb-3">
+              INPUTS ({totalInputs})
+            </div>
+            <div className="space-y-2">
+              {presenterUtxo ? (
+                <div className="flex items-center justify-between font-mono text-xs">
+                  <span className="text-neon">Presenter (input #0)</span>
+                  <span className="text-neon">
+                    {presenterUtxo.value.toLocaleString()} sats
+                  </span>
+                </div>
+              ) : (
+                <p className="font-mono text-xs text-glitch">
+                  No presenter UTXO — restart game from setup
+                </p>
+              )}
+              {playersWithUtxo.length === 0 ? (
+                <p className="font-mono text-xs text-muted-foreground">
+                  No players yet — you can still build and broadcast solo
+                </p>
+              ) : (
+                playersWithUtxo.map((p, i) => (
                   <div
                     key={p.id}
                     className="flex items-center justify-between font-mono text-xs"
                   >
                     <span className="text-muted-foreground">
-                      {p.displayName}
+                      {p.displayName} (input #{i + 1})
                     </span>
                     <span className="text-neon">
                       {p.utxo!.value.toLocaleString()} sats
                     </span>
                   </div>
-                ))}
-              </div>
-            )}
+                ))
+              )}
+            </div>
           </div>
 
           <div className="flex items-center justify-between font-mono text-xs text-muted-foreground px-1">
@@ -231,9 +249,33 @@ export function PsbtBuilder({
             <span>Escrow: {presenterAddress.slice(0, 16)}...</span>
           </div>
 
+          {/* OP_RETURN — set before building, since it's part of what gets signed */}
+          <div className="space-y-1">
+            <label className="font-mono text-xs text-neon uppercase">
+              OP_RETURN message
+              <span className="text-muted-foreground ml-1 font-normal normal-case">
+                (optional)
+              </span>
+            </label>
+            <input
+              type="text"
+              maxLength={80}
+              value={opReturnLocal}
+              onChange={(e) => setOpReturnLocal(e.target.value)}
+              placeholder="e.g. entropy-roulette-btcprague-2025"
+              className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
+            />
+            <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+              <span>Embedded permanently on-chain in Tx 1</span>
+              <span className={opReturnLocal.length > 80 ? "text-glitch" : ""}>
+                {opReturnLocal.length}/80
+              </span>
+            </div>
+          </div>
+
           <Button
             onClick={handleBuild}
-            disabled={isBusy || playersWithUtxo.length === 0}
+            disabled={isBusy || !presenterUtxo || opReturnLocal.length > 80}
             className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
             size="lg"
           >
@@ -324,19 +366,25 @@ export function PsbtBuilder({
             </div>
           </div>
 
-          {/* Signature progress */}
+          {/* Signature progress — presenter first, then players */}
           <div className="bg-muted/20 border border-border rounded-lg p-4">
             <div className="flex items-center justify-between mb-3">
               <span className="font-mono text-sm text-neon">SIGNATURES</span>
               <Badge
-                variant={allSigned ? "default" : "secondary"}
+                variant={readyToFinalize ? "default" : "secondary"}
                 className="font-mono text-xs"
               >
-                {signedCount}/{players.length}
+                {(presenterSigned ? 1 : 0) + signedCount}/{1 + playersWithUtxo.length}
               </Badge>
             </div>
             <div className="space-y-2">
-              {players.map((p) => (
+              <div className="flex items-center justify-between font-mono text-xs">
+                <span className="text-neon">Presenter (input #0)</span>
+                <span className={presenterSigned ? "text-neon" : "text-muted-foreground"}>
+                  {presenterSigned ? "SIGNED" : "PENDING"}
+                </span>
+              </div>
+              {playersWithUtxo.map((p) => (
                 <div
                   key={p.id}
                   className="flex items-center justify-between font-mono text-xs"
@@ -350,30 +398,17 @@ export function PsbtBuilder({
             </div>
           </div>
 
-          {/* OP_RETURN — set here, at the end of the presentation */}
-          <div className="space-y-1">
-            <label className="font-mono text-xs text-neon uppercase">
-              OP_RETURN message
-              <span className="text-muted-foreground ml-1 font-normal normal-case">(optional — set before finalizing)</span>
-            </label>
-            <input
-              type="text"
-              maxLength={80}
-              value={opReturnLocal}
-              onChange={(e) => setOpReturnLocal(e.target.value)}
-              placeholder="e.g. entropy-roulette-btcprague-2025"
-              className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-neon"
-            />
-            <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
-              <span>Embedded permanently on-chain in Tx 1</span>
-              <span className={opReturnLocal.length > 80 ? "text-glitch" : ""}>{opReturnLocal.length}/80</span>
-            </div>
-            {opReturnLocal.trim() && (
-              <p className="font-mono text-[10px] text-neon/70 leading-relaxed">
-                PSBT will be rebuilt with this message before finalizing.
-              </p>
-            )}
-          </div>
+          {/* Presenter signs their own input first */}
+          {!presenterSigned && (
+            <Button
+              onClick={handlePresenterSign}
+              disabled={isBusy}
+              className="w-full bg-memphis text-background hover:bg-memphis/80 font-mono"
+              size="lg"
+            >
+              {isBusy ? "SIGNING..." : "SIGN YOUR INPUT (XVERSE)"}
+            </Button>
+          )}
 
           <div className="flex gap-2">
             <Button
@@ -381,6 +416,7 @@ export function PsbtBuilder({
               className="font-mono"
               onClick={() => {
                 setBuildState(null);
+                setPresenterSigned(false);
                 setStep("build");
               }}
             >
@@ -388,14 +424,16 @@ export function PsbtBuilder({
             </Button>
             <Button
               onClick={handleFinalize}
-              disabled={isBusy || !allSigned || opReturnLocal.length > 80}
+              disabled={isBusy || !readyToFinalize}
               className="flex-1 bg-neon text-background hover:bg-neon/80 font-mono disabled:opacity-50"
             >
               {isBusy
                 ? "FINALIZING..."
-                : allSigned
+                : readyToFinalize
                 ? "FINALIZE & BROADCAST"
-                : `WAITING (${signedCount}/${players.length})`}
+                : !presenterSigned
+                ? "SIGN YOUR INPUT FIRST"
+                : `WAITING FOR PLAYERS (${signedCount}/${playersWithUtxo.length})`}
             </Button>
           </div>
         </motion.div>

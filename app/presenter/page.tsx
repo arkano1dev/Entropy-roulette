@@ -23,7 +23,6 @@ import {
 } from "@/lib/bitcoin/psbt-engine";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { ChevronDown, ChevronUp } from "lucide-react";
 
 type PresenterMode = "setup" | "game";
 
@@ -60,9 +59,6 @@ export default function PresenterPage() {
   const [txid, setTxid] = useState<string | null>(null);
   const [payoutTxid, setPayoutTxid] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
-
-  // Whether the education panel (below QR) is expanded
-  const [educationOpen, setEducationOpen] = useState(true);
 
   // Wallet state
   const [walletState, setWalletState] = useState<PresenterWalletState | undefined>(undefined);
@@ -565,32 +561,8 @@ export default function PresenterPage() {
             )}
           </div>
 
-          {/* Education accordion */}
-          <div className="flex-1">
-            <button
-              className="w-full flex items-center justify-between px-4 py-3 border-b border-border font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
-              onClick={() => setEducationOpen((v) => !v)}
-            >
-              <span>PRESENTATION SLIDES</span>
-              {educationOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-            </button>
-
-            <AnimatePresence initial={false}>
-              {educationOpen && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="overflow-hidden"
-                >
-                  <div className="p-3">
-                    <EducationalSlides variant="presenter" showControls={true} />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          {/* Spacer to push supported wallets to the bottom */}
+          <div className="flex-1" />
 
           {/* Supported wallets */}
           <div className="p-4 border-t border-border mt-auto">
@@ -607,32 +579,45 @@ export default function PresenterPage() {
           </div>
         </div>
 
-        {/* CENTER COLUMN: PSBT builder + inspector */}
+        {/* CENTER COLUMN: presentation slides (prominent) + PSBT tools */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <Tabs defaultValue={currentPsbt ? "inspect" : "build"} className="flex flex-col h-full">
-            <TabsList className="mx-3 mt-3 grid grid-cols-2 flex-shrink-0">
+          <Tabs defaultValue="slides" className="flex flex-col h-full">
+            <TabsList className="mx-3 mt-3 grid grid-cols-3 flex-shrink-0">
+              <TabsTrigger value="slides" className="font-mono text-xs">SLIDES</TabsTrigger>
               <TabsTrigger value="build" className="font-mono text-xs">BUILD PSBT</TabsTrigger>
               <TabsTrigger value="inspect" className="font-mono text-xs">INSPECT</TabsTrigger>
             </TabsList>
 
+            {/* Slides take center stage for the audience */}
+            <TabsContent value="slides" className="flex-1 overflow-auto p-6">
+              <div className="max-w-3xl mx-auto h-full flex items-center">
+                <div className="w-full">
+                  <EducationalSlides variant="presenter" showControls={true} />
+                </div>
+              </div>
+            </TabsContent>
+
             <TabsContent value="build" className="flex-1 overflow-auto p-3">
               {session && walletState?.address ? (
-                <PsbtBuilder
-                  players={session.players}
-                  presenterAddress={walletState.address}
-                  feeRate={feeRate}
-                  opReturnText={opReturnMessage.trim()}
-                  onPsbtBuilt={(psbt) => {
-                    setCurrentPsbt(psbt);
-                    addLog("info", "PSBT built — publishing to players for signing");
-                  }}
-                  onFinalized={(rawTx, finalTxid) => {
-                    setTxid(finalTxid);
-                    setRawTxCache(rawTx);
-                    addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
-                    longPulse();
-                  }}
-                />
+                <div className="max-w-2xl mx-auto">
+                  <PsbtBuilder
+                    players={session.players}
+                    presenterAddress={walletState.address}
+                    presenterUtxo={presenterUtxo}
+                    feeRate={feeRate}
+                    opReturnText={opReturnMessage.trim()}
+                    onPsbtBuilt={(psbt) => {
+                      setCurrentPsbt(psbt);
+                      addLog("info", "PSBT built — publishing to players for signing");
+                    }}
+                    onFinalized={(rawTx, finalTxid) => {
+                      setTxid(finalTxid);
+                      setRawTxCache(rawTx);
+                      addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+                      longPulse();
+                    }}
+                  />
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-40">
                   <div className="font-mono text-sm text-muted-foreground">
@@ -644,12 +629,14 @@ export default function PresenterPage() {
 
             <TabsContent value="inspect" className="flex-1 overflow-auto">
               {session && currentPsbt ? (
-                <PSBTInspector
-                  psbtBase64={currentPsbt}
-                  players={session.players}
-                  feeRate={feeRate}
-                  phase={session.phase}
-                />
+                <div className="max-w-2xl mx-auto">
+                  <PSBTInspector
+                    psbtBase64={currentPsbt}
+                    players={session.players}
+                    feeRate={feeRate}
+                    phase={session.phase}
+                  />
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-40">
                   <div className="font-mono text-sm text-muted-foreground">
