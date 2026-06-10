@@ -6,7 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { WalletSelector, type WalletSignResult } from "@/components/wallet/wallet-selector";
 import { usePlayerGame, useHaptic } from "@/hooks/use-game";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
-import { getFeeEstimates } from "@/lib/bitcoin/mempool-api";
+import { getFeeEstimates, getSpendableUTXO } from "@/lib/bitcoin/mempool-api";
+import { decodePsbt } from "@/lib/bitcoin/psbt-engine";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { WalletId } from "@/components/wallet/wallet-selector";
@@ -326,6 +327,12 @@ function PlayerPageInner() {
   const [betInputStr, setBetInputStr] = useState("5000");
   const [feeRate, setFeeRate] = useState(10);
   const [joinedAddress, setJoinedAddress] = useState("");
+  const [joinedUtxo, setJoinedUtxo] = useState<{
+    txid: string;
+    vout: number;
+    value: number;
+    scriptPubKey: string;
+  } | null>(null);
   const [chosenWalletId, setChosenWalletId] = useState<WalletId | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -389,18 +396,28 @@ function PlayerPageInner() {
     longPulse();
   };
 
-  // ── Step: bet confirmed → join lobby → wait ───────────────────────────────
+  // ── Step: bet confirmed → fetch UTXO → register → wait ────────────────────
   const handleBetConfirmed = async () => {
     if (betAmount < 5000) return;
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      // Now register in the lobby with the real bet amount
-      await joinGame(betAmount, joinedAddress, undefined);
+      // Fetch a real spendable UTXO from the player's wallet address that
+      // covers the bet. This UTXO becomes the player's INPUT in the
+      // presenter's PSBT — without it the presenter has nothing to include
+      // or to collect a signature against.
+      const utxo = await getSpendableUTXO(joinedAddress, betAmount);
+      setJoinedUtxo(utxo);
+
+      // Register the player, carrying the UTXO so the presenter can add it
+      // as an input and build/extend the transaction.
+      await joinGame(betAmount, joinedAddress, undefined, utxo);
       setStep("wait");
       longPulse();
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Failed to join game");
+      setSubmitError(
+        err instanceof Error ? err.message : "Failed to join game"
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -623,6 +640,28 @@ function PlayerPageInner() {
     const hasPsbt = !!publishedPsbt;
     const needsSign = hasPsbt && !psbtSigned;
 
+    // Find THIS player's input index inside the published PSBT by matching
+    // our own UTXO (txid:vout). With multiple players each input differs,
+    // so signing index 0 blindly would sign the wrong input.
+    let myInputIndex = 0;
+    let inputFound = true;
+    if (publishedPsbt && joinedUtxo) {
+      try {
+        const decoded = decodePsbt(publishedPsbt);
+        const idx = decoded.inputs.findIndex(
+          (inp) =>
+            inp.txid === joinedUtxo.txid && inp.vout === joinedUtxo.vout
+        );
+        if (idx >= 0) {
+          myInputIndex = idx;
+        } else {
+          inputFound = false;
+        }
+      } catch {
+        inputFound = false;
+      }
+    }
+
     return (
       <div className="min-h-screen bg-background flex flex-col">
         <StepHeader stepLabel={needsSign ? "Sign transaction" : "Waiting"} />
@@ -702,14 +741,24 @@ function PlayerPageInner() {
                   </p>
                 </div>
 
-                <WalletSelector
-                  mode="sign-psbt"
-                  psbtBase64={publishedPsbt}
-                  inputIndex={0}
-                  betAmount={betAmount}
-                  onSignComplete={handlePsbtSigned}
-                  onManualSign={handlePsbtManual}
-                />
+                {inputFound ? (
+                  <WalletSelector
+                    mode="sign-psbt"
+                    psbtBase64={publishedPsbt}
+                    inputIndex={myInputIndex}
+                    betAmount={betAmount}
+                    onSignComplete={handlePsbtSigned}
+                    onManualSign={handlePsbtManual}
+                  />
+                ) : (
+                  <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
+                    <p className="font-mono text-xs text-glitch leading-relaxed">
+                      Your input was not found in this transaction. The presenter
+                      may have rebuilt the PSBT after you joined. Please wait for
+                      an updated transaction or rejoin the game.
+                    </p>
+                  </div>
+                )}
 
                 {submitError && (
                   <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">

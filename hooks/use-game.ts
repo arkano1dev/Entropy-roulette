@@ -227,14 +227,25 @@ export function usePresenterGame() {
     (playerId: string, pubkey: string, displayName: string, amount: number, receivingAddress: string, utxo?: any) => {
       setSession((current) => {
         if (!current) return current;
-        // Accept joins during LOBBY_OPEN; also accept during IDLE in case of
-        // timing race between openLobby() resolving and Nostr events arriving.
-        const acceptPhases: GamePhase[] = ["LOBBY_OPEN", "IDLE"];
-        if (!acceptPhases.includes(current.phase)) return current;
+        // No lobby gating: a player who signs the message and confirms their
+        // bet is always registered. We only refuse once the game is fully
+        // resolved (COMPLETE), since the transaction has already been built.
+        if (current.phase === "COMPLETE") return current;
 
-        // Deduplicate: don't add the same player twice
-        if (current.players.some((p) => p.id === playerId || p.pubkey === pubkey)) {
-          return current;
+        // Deduplicate: don't add the same player twice. If they rejoin with a
+        // new UTXO/amount, update the existing entry instead.
+        const existingIdx = current.players.findIndex(
+          (p) => p.id === playerId || p.pubkey === pubkey
+        );
+        if (existingIdx >= 0) {
+          const updated = [...current.players];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            amount,
+            receivingAddress,
+            utxo: utxo ?? updated[existingIdx].utxo,
+          };
+          return { ...current, players: updated };
         }
 
         const newPlayer: Player = {

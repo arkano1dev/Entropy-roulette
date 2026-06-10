@@ -153,6 +153,13 @@ export default function PresenterPage() {
     try {
       const playersWithUtxo = session.players.filter((p) => p.utxo);
 
+      if (playersWithUtxo.length === 0) {
+        addLog(
+          "error",
+          "No player inputs yet — players must confirm a bet (which fetches their UTXO) before you can build."
+        );
+        return;
+      }
       // Build escrow PSBT via real API route
       const res = await fetch("/api/psbt", {
         method: "POST",
@@ -171,7 +178,9 @@ export default function PresenterPage() {
       const escrowPsbt = data.data.psbtBase64;
       setCurrentPsbt(escrowPsbt);
       addLog("info", `PSBT built: ${data.data.inputCount} inputs → escrow`);
-      addLog("info", `OP_RETURN embedded: "${opReturnMessage.trim()}"`);
+      if (opReturnMessage.trim()) {
+        addLog("info", `OP_RETURN embedded: "${opReturnMessage.trim()}"`);
+      }
       addLog("info", `Fee: ${data.data.estimatedFee.toLocaleString()} sats`);
 
       // Publish PSBT to Nostr for players

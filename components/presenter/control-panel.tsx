@@ -79,17 +79,26 @@ export function ControlPanel({
         {phase === "LOBBY_OPEN" && (
           <>
             <Button
-              onClick={onCloseLobby}
-              disabled={isLoading}
-              className="w-full bg-glitch text-white hover:bg-glitch/80 font-mono"
+              onClick={onCollectSignatures}
+              disabled={isLoading || playerCount === 0}
+              className="w-full bg-memphis text-background hover:bg-memphis/80 font-mono disabled:opacity-50"
               size="lg"
             >
-              CLOSE LOBBY
+              BUILD PSBT & COLLECT SIGNATURES
+            </Button>
+            <Button
+              onClick={onCloseLobby}
+              disabled={isLoading}
+              variant="outline"
+              className="w-full font-mono"
+              size="sm"
+            >
+              FREEZE PLAYER LIST
             </Button>
             <p className="font-mono text-xs text-center text-muted-foreground">
               {playerCount === 0
-                ? "Lobby open — waiting for players"
-                : `${playerCount} player${playerCount === 1 ? "" : "s"} joined`}
+                ? "Open — waiting for players to sign in"
+                : `${playerCount} player${playerCount === 1 ? "" : "s"} in — build anytime`}
             </p>
           </>
         )}
