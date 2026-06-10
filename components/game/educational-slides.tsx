@@ -293,6 +293,68 @@ const PRESENTER_EDUCATIONAL_SLIDES: EducationalSlide[] = [
     ),
   },
   {
+    id: "psbt-roles",
+    title: "PSBT roles",
+    subtitle: "Five participants, one signed transaction",
+    content: (
+      <div className="space-y-3">
+        <p className="leading-relaxed">
+          BIP 174 defines distinct roles for every entity involved in
+          constructing a PSBT. Each role adds information until the transaction
+          is complete and can be broadcast.
+        </p>
+        <div className="space-y-2">
+          {[
+            {
+              role: "Creator",
+              color: "text-neon",
+              bg: "bg-neon/10 border-neon/30",
+              desc: "Proposes the transaction. Constructs the PSBT with inputs and outputs but no signatures or metadata yet.",
+            },
+            {
+              role: "Updater",
+              color: "text-neon",
+              bg: "bg-neon/10 border-neon/30",
+              desc: "Adds UTXO data for each input — amounts, scriptPubKeys, derivation paths — so signers can verify what they are spending.",
+            },
+            {
+              role: "Signer",
+              color: "text-memphis",
+              bg: "bg-memphis/10 border-memphis/30",
+              desc: "Inspects the transaction and produces a partial signature for inputs they own. Your wallet is the Signer.",
+            },
+            {
+              role: "Finalizer",
+              color: "text-neon",
+              bg: "bg-neon/10 border-neon/30",
+              desc: "Converts all partial signatures into the final scriptSig or witness for each input, once every Signer has contributed.",
+            },
+            {
+              role: "Extractor",
+              color: "text-neon",
+              bg: "bg-neon/10 border-neon/30",
+              desc: "Produces the valid network-format Bitcoin transaction from the finalized PSBT and broadcasts it.",
+            },
+          ].map((item) => (
+            <div key={item.role} className={`flex gap-3 p-2 border rounded ${item.bg}`}>
+              <span className={`font-mono text-[10px] w-20 flex-shrink-0 pt-0.5 uppercase ${item.color}`}>
+                {item.role}
+              </span>
+              <span className="text-[10px] text-muted-foreground leading-relaxed">
+                {item.desc}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="p-2 bg-muted/20 rounded text-[10px] text-muted-foreground leading-relaxed">
+          A <span className="text-foreground">Combiner</span> can merge PSBTs
+          from different Signers working in parallel — enabling the multi-party
+          workflow we use in this game.
+        </div>
+      </div>
+    ),
+  },
+  {
     id: "offline-then-online",
     title: "Offline, then online",
     subtitle: "The critical trust boundary",
