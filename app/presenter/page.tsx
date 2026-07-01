@@ -77,6 +77,9 @@ export default function PresenterPage() {
   const [presenterStakeStr, setPresenterStakeStr] = useState("10000");
   const [presenterUtxo, setPresenterUtxo] = useState<SpendableUTXO | null>(null);
   const [isFetchingUtxo, setIsFetchingUtxo] = useState(false);
+  // Errors during setup — surfaced on the setup screen (the live log panel only
+  // exists in the game view, so setup failures would otherwise be invisible).
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   // Add log entry
   const addLog = useCallback(
@@ -120,6 +123,7 @@ export default function PresenterPage() {
       return;
     }
 
+    setSetupError(null);
     try {
       // Fetch the presenter's own spendable UTXO — this becomes input #0 so a
       // valid transaction can be built and broadcast even with no players.
@@ -138,7 +142,9 @@ export default function PresenterPage() {
       // Auto-open lobby
       addLog("system", "Opening lobby automatically...");
     } catch (err) {
-      addLog("error", `Initialization failed: ${err instanceof Error ? err.message : err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog("error", `Initialization failed: ${msg}`);
+      setSetupError(msg);
     } finally {
       setIsFetchingUtxo(false);
     }
@@ -446,8 +452,12 @@ export default function PresenterPage() {
               </p>
             )}
 
-            {error && (
-              <p className="font-mono text-xs text-glitch text-center">{error}</p>
+            {(setupError || error) && (
+              <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
+                <p className="font-mono text-xs text-glitch text-center leading-relaxed">
+                  {setupError || error}
+                </p>
+              </div>
             )}
           </div>
         </motion.div>
