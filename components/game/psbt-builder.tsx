@@ -482,7 +482,7 @@ export function PsbtBuilder({
               {isBusy
                 ? "FINALIZING..."
                 : readyToFinalize
-                ? "FINALIZE & BROADCAST"
+                ? "FINALIZE PSBT"
                 : !presenterSigned
                 ? "SIGN YOUR INPUT FIRST"
                 : `WAITING FOR PLAYERS (${signedCount}/${playersWithUtxo.length})`}

@@ -9,6 +9,7 @@ import { PsbtBuilder } from "@/components/game/psbt-builder";
 import { ControlPanel } from "@/components/presenter/control-panel";
 import { EducationalSlides } from "@/components/game/educational-slides";
 import { XverseConnectPresenter, type PresenterWalletState } from "@/components/presenter/xverse-connect";
+import { signPlayerPsbt, signPsbtWithXverse } from "@/lib/bitcoin/sats-connect";
 import { usePresenterGame, useHaptic } from "@/hooks/use-game";
 import { setPublishReporter } from "@/lib/nostr/client";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
@@ -74,6 +75,8 @@ export default function PresenterPage() {
   // Whether the presenter has signed their own input #0 (for the inspector).
   const [presenterSigned, setPresenterSigned] = useState(false);
   const [rawTxCache, setRawTxCache] = useState<string | null>(null);
+  // Signed Tx 2 (payout) raw hex, held between finalize and broadcast.
+  const [rawTx2Cache, setRawTx2Cache] = useState<string | null>(null);
 
   // OP_RETURN message — set in the game view before building the PSBT
   const [opReturnMessage, setOpReturnMessage] = useState("");
@@ -271,15 +274,28 @@ export default function PresenterPage() {
     }
   };
 
-  // Handle PSBT finalization — assemble the coinjoin then finalize.
-  // `currentPsbt` must be the presenter's SIGNED fragment (set once the presenter
-  // signs input #0 in the BUILD PSBT tab).
+  // STEP 1 — Finalize: sign the presenter's input #0 (if needed), assemble the
+  // coinjoin from all fragments, and extract the raw tx. Does NOT broadcast.
   const handleFinalize = async () => {
-    if (!session || !currentPsbt || !walletState?.address) return;
+    if (!session || !walletState?.address) return;
+    if (!currentPsbt) {
+      addLog("error", "Build the presenter fragment first (BUILD PSBT).");
+      return;
+    }
 
     try {
-      addLog("system", "Assembling coinjoin...");
+      // 1) Presenter signs their own input #0 if they haven't already.
+      let presenterFragment = currentPsbt;
+      if (!presenterSigned) {
+        addLog("system", "Signing presenter input #0 (Xverse)...");
+        presenterFragment = await signPlayerPsbt(currentPsbt, walletState.address, 0);
+        setCurrentPsbt(presenterFragment);
+        setPresenterSigned(true);
+        addLog("success", "Presenter signed input #0");
+      }
 
+      // 2) Assemble the coinjoin from the presenter + all player fragments.
+      addLog("system", "Assembling coinjoin...");
       const signedPsbts = session.players
         .map((p) => p.signedPsbt)
         .filter(Boolean) as string[];
@@ -289,7 +305,7 @@ export default function PresenterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "assemble",
-          fragments: [currentPsbt, ...signedPsbts],
+          fragments: [presenterFragment, ...signedPsbts],
           escrowAddress: walletState.address,
           opReturnData: opReturnMessage.trim() || undefined,
         }),
@@ -305,6 +321,7 @@ export default function PresenterPage() {
         return;
       }
 
+      // 3) Finalize → raw tx. Held for the separate BROADCAST step.
       const finalRes = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -318,27 +335,85 @@ export default function PresenterPage() {
 
       const { rawTx, txid: finalTxid } = finalData.data;
       setTxid(finalTxid);
-      await setFinalizedPsbt(finalData.data.finalizedPsbt, finalTxid);
       setRawTxCache(rawTx);
+      await setFinalizedPsbt(finalData.data.finalizedPsbt, finalTxid); // phase → FINALIZED
 
-      addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}...`);
+      addLog("success", `PSBT finalized | TXID: ${finalTxid.slice(0, 16)}... — ready to broadcast`);
+
+      // 4) Build + sign Tx 2 (payout) now, before broadcasting. Tx 1's txid is
+      // fixed once finalized, so the winner is known and Tx 2 can spend Tx 1's
+      // escrow outputs. Failure here does NOT undo the finalized Tx 1.
+      const playerCount = session.players.length;
+      if (playerCount > 0) {
+        try {
+          const { winnerIndex, calculation } = calculateWinner(finalTxid, playerCount);
+          const winner = session.players[winnerIndex];
+          if (!winner?.receivingAddress) {
+            addLog("warning", "Winner has no receiving address — skipping Tx 2.");
+          } else {
+            addLog("system", `Winner: ${winner.displayName} (${calculation}) — building Tx 2 payout`);
+            const payoutRes = await fetch("/api/psbt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "build-payout",
+                tx1Hex: rawTx,
+                escrowAddress: walletState.address,
+                winnerAddress: winner.receivingAddress,
+                feeRate,
+              }),
+            });
+            const payoutData = await payoutRes.json();
+            if (!payoutData.success) throw new Error(payoutData.error);
+
+            const inputIdx = Array.from({ length: payoutData.data.inputCount }, (_, i) => i);
+            addLog("system", `Sign Tx 2 payout (${payoutData.data.inputCount} escrow input(s), Xverse)...`);
+            const signedTx2 = await signPsbtWithXverse(
+              payoutData.data.psbtBase64,
+              { [walletState.address]: inputIdx },
+              false
+            );
+            const finalTx2Res = await fetch("/api/psbt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "finalize", psbtBase64: signedTx2 }),
+            });
+            const finalTx2Data = await finalTx2Res.json();
+            if (!finalTx2Data.success) throw new Error(finalTx2Data.error);
+
+            setRawTx2Cache(finalTx2Data.data.rawTx);
+            addLog(
+              "success",
+              `Tx 2 signed — ${payoutData.data.payout.toLocaleString()} sats → ${winner.displayName}. Broadcast to pay out.`
+            );
+          }
+        } catch (tx2Err) {
+          addLog(
+            "warning",
+            `Tx 2 payout not prepared (${tx2Err instanceof Error ? tx2Err.message : tx2Err}). You can still broadcast Tx 1 and pay out later.`
+          );
+        }
+      } else {
+        addLog("info", "Solo presenter — no players, skipping Tx 2 payout.");
+      }
+
       longPulse();
     } catch (err) {
-      addLog("error", `Finalization failed: ${err}`);
+      addLog("error", `Finalization failed: ${err instanceof Error ? err.message : err}`);
     }
   };
 
-  // Handle broadcast (Tx 1)
+  // STEP 2 — Broadcast: send the finalized raw tx to the network and advance the
+  // phase to BROADCAST (so confirmation polling / winner resolution can run).
   const handleBroadcast = async () => {
     if (!session || !txid) return;
 
     try {
-      addLog("system", "Broadcasting Tx 1 to Bitcoin network...");
-
       if (!rawTxCache) {
         addLog("error", "No raw transaction cached — finalize first");
         return;
       }
+      addLog("system", "Broadcasting Tx 1 to Bitcoin network...");
 
       const res = await fetch("/api/psbt", {
         method: "POST",
@@ -348,13 +423,36 @@ export default function PresenterPage() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      addLog("success", `Tx 1 broadcast! TXID: ${data.data.txid.slice(0, 16)}...`);
+      const broadcastTxid = data.data.txid as string;
+      await broadcastTx(broadcastTxid); // phase → BROADCAST
+      addLog("success", `Tx 1 broadcast! TXID: ${broadcastTxid.slice(0, 16)}...`);
+      setRawTxCache(null);
+
+      // Broadcast the pre-signed Tx 2 payout as a child of Tx 1. If the mempool
+      // rejects it (e.g. Tx 1 not yet propagated), keep it cached to retry.
+      if (rawTx2Cache) {
+        try {
+          addLog("system", "Broadcasting Tx 2 payout...");
+          const res2 = await fetch("/api/psbt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "broadcast", rawTx: rawTx2Cache }),
+          });
+          const data2 = await res2.json();
+          if (!data2.success) throw new Error(data2.error);
+          setPayoutTxid(data2.data.txid as string);
+          setRawTx2Cache(null);
+          addLog("success", `Tx 2 payout broadcast! TXID: ${(data2.data.txid as string).slice(0, 16)}...`);
+        } catch (e2) {
+          addLog("warning", `Tx 2 broadcast failed — retry once Tx 1 confirms: ${e2 instanceof Error ? e2.message : e2}`);
+        }
+      }
+
       addLog("info", "Waiting for block confirmation...");
       setIsPolling(true);
-      setRawTxCache(null);
       longPulse();
     } catch (err) {
-      addLog("error", `Broadcast failed: ${err}`);
+      addLog("error", `Broadcast failed: ${err instanceof Error ? err.message : err}`);
     }
   };
 
