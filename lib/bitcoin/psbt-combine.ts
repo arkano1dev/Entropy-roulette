@@ -263,6 +263,58 @@ export function assembleCoinjoin(
 }
 
 /**
+ * Build an UNSIGNED preview of the full coinjoin for inspection/display: every
+ * participant's input paired with their escrow output (input − fee), plus the
+ * OP_RETURN. This is the exact structure of the transaction that will be
+ * assembled once everyone signs — used so the INSPECT view matches the BUILD
+ * view instead of showing only the presenter's lone fragment.
+ */
+export function buildCoinjoinPreview(params: {
+  presenterUtxo?: UTXO | null;
+  playerUtxos: UTXO[];
+  escrowAddress: string;
+  feeRate: number;
+  opReturnData?: string;
+}): string {
+  const { presenterUtxo, playerUtxos, escrowAddress, feeRate, opReturnData } = params;
+  const psbt = new bitcoin.Psbt({ network });
+  const escrowScript = addressToScript(escrowAddress);
+  const opReturnBytes = opReturnData ? Buffer.from(opReturnData, "utf8").length : 0;
+
+  const addParticipant = (utxo: UTXO, fee: number) => {
+    const escrowValue = utxo.value - fee;
+    psbt.addInput({
+      hash: utxo.txid,
+      index: utxo.vout,
+      sequence: 0xfffffffd,
+      sighashType: SIGHASH_SINGLE_ANYONECANPAY,
+      witnessUtxo: {
+        script: Uint8Array.from(Buffer.from(utxo.scriptPubKey, "hex")),
+        value: BigInt(utxo.value),
+      },
+    });
+    // Preview only — skip a below-zero output rather than throwing on dust.
+    if (escrowValue > 0) {
+      if (escrowScript) {
+        psbt.addOutput({ script: Uint8Array.from(escrowScript), value: BigInt(escrowValue) });
+      } else {
+        psbt.addOutput({ address: escrowAddress, value: BigInt(escrowValue) });
+      }
+    }
+  };
+
+  if (presenterUtxo) addParticipant(presenterUtxo, presenterFee(feeRate, opReturnBytes));
+  for (const u of playerUtxos) addParticipant(u, perParticipantFee(feeRate));
+
+  const opReturn = opReturnData?.trim();
+  if (opReturn) {
+    psbt.addOutput({ script: Uint8Array.from(buildOpReturnScript(opReturn)), value: BigInt(0) });
+  }
+
+  return psbt.toBase64();
+}
+
+/**
  * Throw a clear error if any input of an assembled PSBT lacks a signature,
  * instead of letting `finalizeAllInputs()` fail with an opaque message.
  */

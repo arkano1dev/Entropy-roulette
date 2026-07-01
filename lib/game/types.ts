@@ -84,16 +84,18 @@ export const NOSTR_KINDS = {
 
 // Default game configuration
 export const DEFAULT_CONFIG = {
-  minBet: 5000, // 5k sats
+  minBet: 1000, // 1k sats
   maxBet: 1000000, // 1M sats
   defaultBet: 25000, // 25k sats
   presenterBet: 50000, // 50k sats (sponsor input)
   feeRate: 10, // sat/vB
 } as const;
 
-// Relay URLs
+// Relay URLs — all confirmed write-capable (relay.nostr.band was dropped: it is
+// an indexer/read relay that rejects writes and was frequently unreachable).
 export const NOSTR_RELAYS = [
   "wss://nos.lol",
   "wss://relay.damus.io",
-  "wss://relay.nostr.band",
+  "wss://relay.primal.net",
+  "wss://relay.snort.social",
 ] as const;

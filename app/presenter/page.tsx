@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
 import { PSBTInspector } from "@/components/game/psbt-inspector";
@@ -10,14 +10,18 @@ import { ControlPanel } from "@/components/presenter/control-panel";
 import { EducationalSlides } from "@/components/game/educational-slides";
 import { XverseConnectPresenter, type PresenterWalletState } from "@/components/presenter/xverse-connect";
 import { usePresenterGame, useHaptic } from "@/hooks/use-game";
+import { setPublishReporter } from "@/lib/nostr/client";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
 import {
   getFeeEstimates,
   getBlockHeight,
   getTransactionStatus,
-  getSpendableUTXO,
+  getAddressUTXOs,
+  getOutputScriptPubKey,
+  type MempoolUTXO,
   type SpendableUTXO,
 } from "@/lib/bitcoin/mempool-api";
+import { presenterFee, buildCoinjoinPreview } from "@/lib/bitcoin/psbt-combine";
 import {
   calculateWinner,
 } from "@/lib/bitcoin/psbt-engine";
@@ -40,6 +44,8 @@ export default function PresenterPage() {
     broadcastTx,
     confirmAndResolve,
     publishPsbtForSigning,
+    resetForRebuild,
+    resync,
     totalPot,
   } = usePresenterGame();
 
@@ -65,6 +71,8 @@ export default function PresenterPage() {
 
   // PSBT state
   const [currentPsbt, setCurrentPsbt] = useState<string | null>(null);
+  // Whether the presenter has signed their own input #0 (for the inspector).
+  const [presenterSigned, setPresenterSigned] = useState(false);
   const [rawTxCache, setRawTxCache] = useState<string | null>(null);
 
   // OP_RETURN message — set in the game view before building the PSBT
@@ -73,9 +81,12 @@ export default function PresenterPage() {
   // Presenter self-stake — the presenter's own UTXO is the FIRST input of the
   // transaction. This makes a PSBT possible with zero players: presenter alone
   // can build → sign → broadcast to demonstrate writing to the blockchain.
-  const [presenterStake, setPresenterStake] = useState(10000);
-  const [presenterStakeStr, setPresenterStakeStr] = useState("10000");
   const [presenterUtxo, setPresenterUtxo] = useState<SpendableUTXO | null>(null);
+  // Coin picker for the presenter's own input #0.
+  const [utxos, setUtxos] = useState<MempoolUTXO[] | null>(null);
+  const [selectedUtxo, setSelectedUtxo] = useState<MempoolUTXO | null>(null);
+  const [isLoadingUtxos, setIsLoadingUtxos] = useState(false);
+  const [utxoError, setUtxoError] = useState<string | null>(null);
   const [isFetchingUtxo, setIsFetchingUtxo] = useState(false);
   // Errors during setup — surfaced on the setup screen (the live log panel only
   // exists in the game view, so setup failures would otherwise be invisible).
@@ -88,6 +99,27 @@ export default function PresenterPage() {
     },
     []
   );
+
+  // Surface Nostr publish failures in the live log (deduped so the 8s player
+  // heartbeats don't spam). A silent all-relay rejection is what hid the earlier
+  // bad-tag bug, so partial rejections are logged as warnings here.
+  const publishWarnRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    setPublishReporter((report) => {
+      if (report.rejected.length === 0) return;
+      const key = `${report.label}|${report.rejected.map((r) => r.relay).sort().join(",")}`;
+      if (publishWarnRef.current.has(key)) return;
+      publishWarnRef.current.add(key);
+      const level = report.accepted.length === 0 ? "error" : "warning";
+      addLog(
+        level,
+        `Relay ${report.label}: ${report.accepted.length}/${report.total} accepted — rejected ${report.rejected
+          .map((r) => `${r.relay.replace("wss://", "")} (${r.error})`)
+          .join(", ")}`
+      );
+    });
+    return () => setPublishReporter(null);
+  }, [addLog]);
 
   // Fetch block height and fees on mount
   useEffect(() => {
@@ -108,6 +140,25 @@ export default function PresenterPage() {
     fetchData();
   }, [addLog]);
 
+  // Load the presenter's coins once the wallet is connected.
+  useEffect(() => {
+    const addr = walletState?.address;
+    if (!addr || !walletState?.connected) return;
+    setIsLoadingUtxos(true);
+    setUtxoError(null);
+    setSelectedUtxo(null);
+    getAddressUTXOs(addr)
+      .then((list) => {
+        const sorted = [...list].sort((a, b) => {
+          const conf = (a.status.confirmed ? 0 : 1) - (b.status.confirmed ? 0 : 1);
+          return conf !== 0 ? conf : b.value - a.value;
+        });
+        setUtxos(sorted);
+      })
+      .catch((e) => setUtxoError(e instanceof Error ? e.message : "Failed to load coins"))
+      .finally(() => setIsLoadingUtxos(false));
+  }, [walletState?.address, walletState?.connected]);
+
   // Handle initialization — auto-opens lobby immediately after
   const handleInitialize = async () => {
     if (!walletState?.connected) {
@@ -118,18 +169,24 @@ export default function PresenterPage() {
       addLog("error", "Sign the game creation message first");
       return;
     }
-    if (presenterStake < 546) {
-      addLog("error", "Stake must be at least 546 sats (dust limit)");
+    if (!selectedUtxo) {
+      addLog("error", "Select a coin to stake (input #0) first");
       return;
     }
 
     setSetupError(null);
     try {
-      // Fetch the presenter's own spendable UTXO — this becomes input #0 so a
-      // valid transaction can be built and broadcast even with no players.
+      // Enrich the selected coin — it becomes input #0 so a valid transaction
+      // can be built and broadcast even with no players.
       setIsFetchingUtxo(true);
-      addLog("system", `Fetching presenter UTXO for ${presenterStake.toLocaleString()} sats...`);
-      const utxo = await getSpendableUTXO(walletState.address, presenterStake);
+      addLog("system", `Locking presenter coin ${selectedUtxo.txid.slice(0, 12)}…#${selectedUtxo.vout} (${selectedUtxo.value.toLocaleString()} sats)...`);
+      const scriptPubKey = await getOutputScriptPubKey(selectedUtxo.txid, selectedUtxo.vout);
+      const utxo: SpendableUTXO = {
+        txid: selectedUtxo.txid,
+        vout: selectedUtxo.vout,
+        value: selectedUtxo.value,
+        scriptPubKey,
+      };
       setPresenterUtxo(utxo);
       addLog("success", `Presenter input locked: ${utxo.value.toLocaleString()} sats (${utxo.txid.slice(0, 12)}...#${utxo.vout})`);
 
@@ -354,6 +411,30 @@ export default function PresenterPage() {
     }
   }, [session?.players.length, session?.phase, addLog, longPulse]);
 
+  // The PSBT shown in the INSPECT tab. Once a tx has been finalized/broadcast we
+  // show that real assembled tx; otherwise we show an unsigned PREVIEW of the
+  // full coinjoin (presenter + all player inputs → escrow outputs), so INSPECT
+  // matches what the BUILD tab plans instead of only the presenter's fragment.
+  const inspectPsbt = useMemo(() => {
+    if (txid && currentPsbt) return currentPsbt;
+    const addr = walletState?.address;
+    const playerUtxos = (session?.players ?? [])
+      .filter((p) => p.utxo)
+      .map((p) => p.utxo!);
+    if (!addr || (!presenterUtxo && playerUtxos.length === 0)) return currentPsbt;
+    try {
+      return buildCoinjoinPreview({
+        presenterUtxo,
+        playerUtxos,
+        escrowAddress: addr,
+        feeRate,
+        opReturnData: opReturnMessage.trim() || undefined,
+      });
+    } catch {
+      return currentPsbt;
+    }
+  }, [txid, currentPsbt, presenterUtxo, session?.players, walletState?.address, feeRate, opReturnMessage]);
+
   // Generate join URL
   const getJoinUrl = () => {
     if (!session || !keypair) return "";
@@ -401,41 +482,86 @@ export default function PresenterPage() {
               )}
             </div>
 
-            {/* Presenter stake — first input of the transaction */}
+            {/* Presenter coin picker — first input (#0) of the transaction */}
             {walletState?.connected && (
               <div className="space-y-2">
                 <label className="font-mono text-xs text-neon uppercase">
-                  Your stake (input #0)
+                  Your stake coin (input #0)
                 </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={presenterStakeStr}
-                  onChange={(e) => {
-                    const raw = e.target.value.replace(/\D/g, "");
-                    setPresenterStakeStr(raw);
-                    const parsed = parseInt(raw, 10);
-                    setPresenterStake(isNaN(parsed) ? 0 : parsed);
-                  }}
-                  onBlur={() => {
-                    if (!presenterStakeStr || parseInt(presenterStakeStr, 10) < 546) {
-                      setPresenterStakeStr("10000");
-                      setPresenterStake(10000);
-                    }
-                  }}
-                  className="w-full px-3 py-2 bg-muted/20 border border-border rounded-lg font-mono text-sm text-neon focus:outline-none focus:border-neon"
-                />
                 <p className="font-mono text-[10px] text-muted-foreground leading-relaxed">
-                  The sats you commit from your own wallet. This single input lets
-                  you build and broadcast a transaction even with no players.
+                  The <span className="text-foreground">whole coin</span> you select becomes
+                  input #0 — it goes to escrow minus the fee, and lets you build and broadcast
+                  even with no players.
                 </p>
+
+                {isLoadingUtxos && (
+                  <div className="font-mono text-[10px] text-muted-foreground py-2">
+                    Loading your coins…
+                  </div>
+                )}
+                {utxoError && (
+                  <div className="p-2 bg-glitch/10 border border-glitch/30 rounded-lg">
+                    <p className="font-mono text-[10px] text-glitch">{utxoError}</p>
+                  </div>
+                )}
+                {utxos && utxos.length === 0 && (
+                  <div className="p-2 bg-glitch/10 border border-glitch/30 rounded-lg">
+                    <p className="font-mono text-[10px] text-glitch">
+                      No coins found for this wallet. Fund the address, then reconnect.
+                    </p>
+                  </div>
+                )}
+                {utxos && utxos.length > 0 && (
+                  <div className="space-y-2 max-h-56 overflow-y-auto">
+                    {utxos.map((u) => {
+                      const fee = presenterFee(feeRate);
+                      const potContribution = u.value - fee;
+                      const viable = potContribution > 546;
+                      const sel = selectedUtxo?.txid === u.txid && selectedUtxo?.vout === u.vout;
+                      return (
+                        <button
+                          key={`${u.txid}:${u.vout}`}
+                          disabled={!viable}
+                          onClick={() => setSelectedUtxo(u)}
+                          className={`w-full text-left p-2.5 rounded-lg border transition-all ${
+                            sel
+                              ? "border-neon bg-neon/10"
+                              : viable
+                              ? "border-border bg-muted/10 hover:border-neon/50"
+                              : "border-border bg-muted/5 opacity-50 cursor-not-allowed"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-sm text-neon">
+                              {formatSats(u.value)}
+                            </span>
+                            <span
+                              className={`font-mono text-[10px] ${
+                                u.status.confirmed ? "text-muted-foreground" : "text-glitch"
+                              }`}
+                            >
+                              {u.status.confirmed ? "confirmed" : "unconfirmed"}
+                            </span>
+                          </div>
+                          <div className="font-mono text-[10px] text-muted-foreground mt-0.5 break-all">
+                            {u.txid.slice(0, 16)}…:{u.vout}
+                            {viable ? (
+                              <span className="text-neon"> → {formatSats(potContribution)} to pot</span>
+                            ) : (
+                              <span className="text-glitch"> — too small for fee</span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
             <Button
               onClick={handleInitialize}
-              disabled={isInitializing || isFetchingUtxo || !walletState?.signature || presenterStake < 546}
+              disabled={isInitializing || isFetchingUtxo || !walletState?.signature || !selectedUtxo}
               className="w-full bg-neon text-background hover:bg-neon/80 font-mono"
               size="lg"
             >
@@ -531,9 +657,7 @@ export default function PresenterPage() {
             <div className="text-center space-y-2">
               <p className="font-mono text-sm text-neon">Scan to join the game</p>
               <div className="font-mono text-[10px] text-muted-foreground break-all leading-relaxed">
-                {typeof window !== "undefined"
-                  ? `${window.location.origin}/player?game=${session?.id}`
-                  : ""}
+                {getJoinUrl()}
               </div>
             </div>
           </div>
@@ -611,6 +735,7 @@ export default function PresenterPage() {
                     opReturnText={opReturnMessage.trim()}
                     onPsbtBuilt={(psbt) => {
                       setCurrentPsbt(psbt);
+                      setPresenterSigned(false); // fresh unsigned fragment
                       // Publish the presenter fragment so players can read the
                       // escrow address from it and build their own fragments.
                       publishPsbtForSigning(psbt).catch(() => {});
@@ -620,7 +745,19 @@ export default function PresenterPage() {
                     onPresenterSigned={(signed) => {
                       // Keep the presenter's SIGNED fragment as the assembly base.
                       setCurrentPsbt(signed);
+                      setPresenterSigned(true);
                       addLog("success", "Presenter signed input #0");
+                    }}
+                    onStepChange={(s) => {
+                      // Back at build/inspect (e.g. after a rebuild or tab switch)
+                      // → drop the stale finalized tx so the control panel stops
+                      // showing "Broadcast" and re-collects signatures.
+                      if (s === "build" || s === "inspect") {
+                        setTxid(null);
+                        setRawTxCache(null);
+                        setPresenterSigned(false);
+                        resetForRebuild().catch(() => {});
+                      }
                     }}
                     onFinalized={(rawTx, finalTxid) => {
                       setTxid(finalTxid);
@@ -654,11 +791,13 @@ export default function PresenterPage() {
             </TabsContent>
 
             <TabsContent value="inspect" className="flex-1 overflow-auto">
-              {session && currentPsbt ? (
+              {session && inspectPsbt ? (
                 <div className="max-w-2xl mx-auto">
                   <PSBTInspector
-                    psbtBase64={currentPsbt}
+                    psbtBase64={inspectPsbt}
                     players={session.players}
+                    presenterInput={!!presenterUtxo}
+                    presenterSigned={presenterSigned}
                     feeRate={feeRate}
                     phase={session.phase}
                   />
@@ -686,6 +825,21 @@ export default function PresenterPage() {
               </TabsList>
 
               <TabsContent value="players" className="px-3 pb-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono text-[10px] text-muted-foreground uppercase">
+                    {session?.players.length ?? 0} joined
+                  </span>
+                  <button
+                    onClick={() => {
+                      resync();
+                      addLog("system", "Resyncing relay subscriptions…");
+                    }}
+                    className="font-mono text-[10px] text-neon hover:underline"
+                    title="Re-subscribe to Nostr relays to catch players you may have missed"
+                  >
+                    ↻ Resync
+                  </button>
+                </div>
                 {session?.players && session.players.length > 0 ? (
                   <div className="space-y-2">
                     {session.players.map((player, index) => (

@@ -32,6 +32,84 @@ export function closePool(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Publish diagnostics — surface per-relay accept/reject so a silent relay
+// rejection (like the earlier bad-`e`-tag bug) is immediately visible.
+// ---------------------------------------------------------------------------
+
+export interface PublishReport {
+  label: string; // human-readable kind, e.g. "player-join"
+  accepted: string[]; // relay URLs that acknowledged the event
+  rejected: { relay: string; error: string }[];
+  total: number;
+}
+
+type PublishReporter = (report: PublishReport) => void;
+let publishReporter: PublishReporter | null = null;
+
+/** Register a callback to observe every publish result (e.g. log to the UI). */
+export function setPublishReporter(fn: PublishReporter | null): void {
+  publishReporter = fn;
+}
+
+const KIND_LABEL: Record<number, string> = {
+  [NOSTR_KINDS.GAME_SESSION]: "game-session",
+  [NOSTR_KINDS.PLAYER_JOIN]: "player-join",
+  [NOSTR_KINDS.PSBT_FRAGMENT]: "psbt-fragment",
+  [NOSTR_KINDS.GAME_STATE]: "game-state",
+  [NOSTR_KINDS.GAME_RESULT]: "game-result",
+  [NOSTR_KINDS.PSBT_PUBLISH]: "psbt-publish",
+  [NOSTR_KINDS.PAYOUT_TX]: "payout-tx",
+};
+
+/**
+ * Publish an event to all relays, awaiting each result. Reports per-relay
+ * accept/reject (console + optional reporter) and throws only if EVERY relay
+ * rejected — so `withRetry` still retries a total failure, but partial success
+ * (the normal case) proceeds while remaining visible.
+ */
+async function publishEvent(pool: SimplePool, event: Event): Promise<PublishReport> {
+  const relays = NOSTR_RELAYS as unknown as string[];
+  const results = await Promise.allSettled(pool.publish(relays, event));
+
+  const accepted: string[] = [];
+  const rejected: { relay: string; error: string }[] = [];
+  results.forEach((res, i) => {
+    if (res.status === "fulfilled") {
+      accepted.push(relays[i]);
+    } else {
+      rejected.push({
+        relay: relays[i],
+        error: res.reason instanceof Error ? res.reason.message : String(res.reason),
+      });
+    }
+  });
+
+  const report: PublishReport = {
+    label: KIND_LABEL[event.kind] ?? `kind-${event.kind}`,
+    accepted,
+    rejected,
+    total: relays.length,
+  };
+
+  if (rejected.length > 0) {
+    console.warn(
+      `[nostr] ${report.label}: ${accepted.length}/${relays.length} relays accepted; rejected —`,
+      rejected
+    );
+  }
+  publishReporter?.(report);
+
+  if (accepted.length === 0) {
+    throw new Error(
+      `All relays rejected ${report.label}: ${rejected
+        .map((r) => `${r.relay} (${r.error})`)
+        .join("; ")}`
+    );
+  }
+  return report;
+}
+
 // Retry wrapper with exponential backoff
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -102,9 +180,7 @@ export async function publishGameSession(
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -126,7 +202,7 @@ export async function publishPlayerJoin(
       kind: NOSTR_KINDS.PLAYER_JOIN,
       created_at: Math.floor(Date.now() / 1000),
       tags: [
-        ["e", gameId],
+        ["t", gameId],
         ["p", pubkey],
         ["playerId", playerId],
         ["amount", amount.toString()],
@@ -143,9 +219,7 @@ export async function publishPlayerJoin(
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -164,7 +238,7 @@ export async function publishPsbtFragment(
       kind: NOSTR_KINDS.PSBT_FRAGMENT,
       created_at: Math.floor(Date.now() / 1000),
       tags: [
-        ["e", gameId],
+        ["t", gameId],
         ["p", pubkey],
         ["playerId", playerId],
       ],
@@ -173,9 +247,7 @@ export async function publishPsbtFragment(
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -192,15 +264,13 @@ export async function publishPsbtPublish(
     const eventTemplate = {
       kind: NOSTR_KINDS.PSBT_PUBLISH,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [["e", gameId]],
+      tags: [["t", gameId]],
       content: psbtBase64,
       pubkey,
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -218,7 +288,7 @@ export async function publishGameState(
     const pubkey = getPublicKey(secretKey);
 
     const tags: string[][] = [
-      ["e", gameId],
+      ["t", gameId],
       ["status", phase],
       ["pot", totalPot.toString()],
       ["players", playerCount.toString()],
@@ -243,9 +313,7 @@ export async function publishGameState(
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -264,7 +332,7 @@ export async function publishPayoutTx(
       kind: NOSTR_KINDS.PAYOUT_TX,
       created_at: Math.floor(Date.now() / 1000),
       tags: [
-        ["e", gameId],
+        ["t", gameId],
         ["txid", payoutTxid],
         ["winner", winnerAddress],
       ],
@@ -277,9 +345,7 @@ export async function publishPayoutTx(
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -302,7 +368,7 @@ export async function publishGameResult(
       kind: NOSTR_KINDS.GAME_RESULT,
       created_at: Math.floor(Date.now() / 1000),
       tags: [
-        ["e", gameId],
+        ["t", gameId],
         ["p", winnerPubkey],
         ["winner", winnerId],
         ["pot", totalPot.toString()],
@@ -321,9 +387,7 @@ export async function publishGameResult(
     };
 
     const event = finalizeEvent(eventTemplate, secretKey);
-    await Promise.any(
-      p.publish(NOSTR_RELAYS as unknown as string[], event)
-    );
+    await publishEvent(p, event);
   });
 }
 
@@ -361,7 +425,7 @@ export function subscribeToPlayerJoins(
 
   const filter: Filter = {
     kinds: [NOSTR_KINDS.PLAYER_JOIN],
-    "#e": [gameId],
+    "#t": [gameId],
     since: Math.floor(Date.now() / 1000) - 3600,
   };
 
@@ -385,7 +449,7 @@ export function subscribeToPsbtFragments(
 
   const filter: Filter = {
     kinds: [NOSTR_KINDS.PSBT_FRAGMENT],
-    "#e": [gameId],
+    "#t": [gameId],
     since: Math.floor(Date.now() / 1000) - 3600,
   };
 
@@ -409,7 +473,7 @@ export function subscribeToPsbtPublish(
 
   const filter: Filter = {
     kinds: [NOSTR_KINDS.PSBT_PUBLISH],
-    "#e": [gameId],
+    "#t": [gameId],
     since: Math.floor(Date.now() / 1000) - 3600,
   };
 
@@ -433,7 +497,7 @@ export function subscribeToGameState(
 
   const filter: Filter = {
     kinds: [NOSTR_KINDS.GAME_STATE],
-    "#e": [gameId],
+    "#t": [gameId],
     since: Math.floor(Date.now() / 1000) - 3600,
   };
 
@@ -457,7 +521,7 @@ export function subscribeToGameResult(
 
   const filter: Filter = {
     kinds: [NOSTR_KINDS.GAME_RESULT],
-    "#e": [gameId],
+    "#t": [gameId],
     since: Math.floor(Date.now() / 1000) - 3600,
   };
 
