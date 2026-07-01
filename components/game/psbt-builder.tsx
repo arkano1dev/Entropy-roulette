@@ -23,6 +23,8 @@ interface PsbtBuilderProps {
   /** OP_RETURN text set by the presenter at game creation — always embedded. */
   opReturnText: string;
   onPsbtBuilt: (psbtBase64: string) => void;
+  /** Called after the presenter signs their own input #0 (the signed fragment). */
+  onPresenterSigned?: (signedPsbtBase64: string) => void;
   onFinalized: (rawTx: string, txid: string) => void;
   /** Called after the raw tx is successfully broadcast to the Bitcoin network. */
   onBroadcasted?: (txid: string) => void;
@@ -47,6 +49,7 @@ export function PsbtBuilder({
   feeRate,
   opReturnText,
   onPsbtBuilt,
+  onPresenterSigned,
   onFinalized,
   onBroadcasted,
 }: PsbtBuilderProps) {
@@ -65,23 +68,11 @@ export function PsbtBuilder({
   // The field is seeded from the prop (empty until the presenter fills it in).
   const [opReturnLocal, setOpReturnLocal] = useState(opReturnText ?? "");
 
-  // The inputs of the transaction: presenter first (input #0), then players.
+  // Coinjoin model: the presenter builds only their OWN 1-in/1-out fragment
+  // (input #0). Each player builds and signs their own fragment independently.
   const playerInputs = players.filter((p) => p.utxo);
-  const buildPayload = useCallback(
-    (opReturn?: string) => ({
-      action: "build" as const,
-      players: [
-        ...(presenterUtxo ? [{ utxo: presenterUtxo }] : []),
-        ...playerInputs.map((p) => ({ utxo: p.utxo })),
-      ],
-      escrowAddress: presenterAddress,
-      feeRate,
-      opReturnData: opReturn?.trim() || undefined,
-    }),
-    [presenterUtxo, playerInputs, presenterAddress, feeRate]
-  );
 
-  // --- Build the initial PSBT ---
+  // --- Build the presenter's coinjoin fragment (input #0) ---
   const handleBuild = useCallback(async () => {
     setError(null);
     setIsBusy(true);
@@ -89,7 +80,14 @@ export function PsbtBuilder({
       const res = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(opReturnLocal)),
+        body: JSON.stringify({
+          action: "build-participant",
+          utxo: presenterUtxo,
+          escrowAddress: presenterAddress,
+          feeRate,
+          role: "presenter",
+          opReturnData: opReturnLocal.trim() || undefined,
+        }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -108,15 +106,17 @@ export function PsbtBuilder({
       setBuildState({
         psbtBase64: result.psbtBase64,
         psbtHex: result.psbtHex,
-        inputCount: result.inputCount,
-        outputCount: result.outputCount,
-        estimatedFee: result.estimatedFee,
+        inputCount: decoded?.inputCount ?? 1,
+        outputCount: decoded?.outputCount ?? 1,
+        estimatedFee: result.fee ?? 0,
         hasOpReturn: decoded?.hasOpReturn ?? false,
         opReturnData: decoded?.opReturnData,
         totalInputSats: decoded?.totalInputSats ?? 0,
         totalOutputSats: decoded?.totalOutputSats ?? 0,
       });
 
+      // Publish the (unsigned) presenter fragment so players can read the escrow
+      // address from it and build their own fragments in parallel.
       onPsbtBuilt(result.psbtBase64);
       setPresenterSigned(false);
       setStep("inspect");
@@ -125,7 +125,7 @@ export function PsbtBuilder({
     } finally {
       setIsBusy(false);
     }
-  }, [buildPayload, opReturnLocal, onPsbtBuilt]);
+  }, [presenterUtxo, presenterAddress, feeRate, opReturnLocal, onPsbtBuilt]);
 
   // --- Presenter signs their own input (#0) ---
   const handlePresenterSign = useCallback(async () => {
@@ -133,44 +133,50 @@ export function PsbtBuilder({
     setError(null);
     setIsBusy(true);
     try {
-      // Presenter's input is always index 0.
+      // Presenter's input is always index 0 of their own fragment.
       const signed = await signPlayerPsbt(buildState.psbtBase64, presenterAddress, 0);
       setBuildState((prev) => (prev ? { ...prev, psbtBase64: signed } : prev));
       setPresenterSigned(true);
+      onPresenterSigned?.(signed);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsBusy(false);
     }
-  }, [buildState, presenterAddress]);
+  }, [buildState, presenterAddress, onPresenterSigned]);
 
-  // --- Finalize: (optionally rebuild with OP_RETURN) combine sigs, extract tx ---
+  // --- Finalize: assemble the coinjoin (presenter + player fragments), extract tx ---
   const handleFinalize = useCallback(async () => {
     if (!buildState?.psbtBase64) return;
     setError(null);
     setIsBusy(true);
     try {
-      // The presenter must have signed their own input (#0) first.
-      // buildState.psbtBase64 already contains the presenter's signature.
+      // buildState.psbtBase64 is the presenter's signed fragment (input #0).
       const presenterSignedPsbt = buildState.psbtBase64;
 
       const signedFragments = players
         .map((p) => p.signedPsbt)
         .filter((s): s is string => Boolean(s));
 
-      // Combine the presenter-signed PSBT with all player fragments.
-      let combinedBase64 = presenterSignedPsbt;
-      if (signedFragments.length > 0) {
-        const allPsbts = [presenterSignedPsbt, ...signedFragments];
-        const combineRes = await fetch("/api/psbt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "combine", psbts: allPsbts }),
-        });
-        const combineData = await combineRes.json();
-        if (!combineData.success) throw new Error(combineData.error);
-        combinedBase64 = combineData.data.psbtBase64;
+      // Assemble every signed 1-in/1-out fragment into one coinjoin transaction.
+      const assembleRes = await fetch("/api/psbt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "assemble",
+          fragments: [presenterSignedPsbt, ...signedFragments],
+          escrowAddress: presenterAddress,
+          opReturnData: opReturnLocal.trim() || undefined,
+        }),
+      });
+      const assembleData = await assembleRes.json();
+      if (!assembleData.success) throw new Error(assembleData.error);
+      if (!assembleData.data.signaturesValid) {
+        throw new Error(
+          `Assembled signatures invalid: ${assembleData.data.signaturesError ?? "one or more signatures did not verify"}`
+        );
       }
+      const combinedBase64 = assembleData.data.psbtBase64;
 
       // Finalize all inputs and extract raw transaction
       const finalRes = await fetch("/api/psbt", {
@@ -194,7 +200,7 @@ export function PsbtBuilder({
     } finally {
       setIsBusy(false);
     }
-  }, [buildState, players, onFinalized]);
+  }, [buildState, players, presenterAddress, opReturnLocal, onFinalized]);
 
   // --- Broadcast: send the raw transaction to the Bitcoin network ---
   const handleBroadcast = useCallback(async () => {
