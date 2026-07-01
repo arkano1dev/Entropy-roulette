@@ -8,6 +8,7 @@ import { usePlayerGame, useHaptic } from "@/hooks/use-game";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
 import { getFeeEstimates, getSpendableUTXO } from "@/lib/bitcoin/mempool-api";
 import { decodePsbt } from "@/lib/bitcoin/psbt-engine";
+import { buildParticipantPsbt, perParticipantFee } from "@/lib/bitcoin/psbt-combine";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { WalletId } from "@/components/wallet/wallet-selector";
@@ -676,27 +677,30 @@ function PlayerPageInner() {
     const hasPsbt = !!publishedPsbt;
     const needsSign = hasPsbt && !psbtSigned;
 
-    // Find THIS player's input index inside the published PSBT by matching
-    // our own UTXO (txid:vout). With multiple players each input differs,
-    // so signing index 0 blindly would sign the wrong input.
-    let myInputIndex = 0;
-    let inputFound = true;
+    // Coinjoin model: the presenter's published fragment only tells us the
+    // ESCROW ADDRESS (its single output). We build our OWN 1-in/1-out fragment
+    // from our UTXO → escrow, flagged SIGHASH_SINGLE|ANYONECANPAY, and sign
+    // input #0 of it. The presenter splices it into the coinjoin.
+    let myFragment: string | null = null;
+    let buildError: string | null = null;
     if (publishedPsbt && joinedUtxo) {
       try {
         const decoded = decodePsbt(publishedPsbt);
-        const idx = decoded.inputs.findIndex(
-          (inp) =>
-            inp.txid === joinedUtxo.txid && inp.vout === joinedUtxo.vout
-        );
-        if (idx >= 0) {
-          myInputIndex = idx;
+        const escrowAddress = decoded.outputs.find((o) => !o.isOpReturn && o.address)?.address;
+        if (!escrowAddress) {
+          buildError = "Could not read the escrow address from the presenter's transaction.";
         } else {
-          inputFound = false;
+          myFragment = buildParticipantPsbt({
+            utxo: joinedUtxo,
+            escrowAddress,
+            feeSats: perParticipantFee(feeRate),
+          }).psbtBase64;
         }
-      } catch {
-        inputFound = false;
+      } catch (err) {
+        buildError = err instanceof Error ? err.message : "Failed to build your transaction.";
       }
     }
+    const inputFound = !!myFragment;
 
     return (
       <div className="min-h-screen bg-background flex flex-col">
@@ -780,8 +784,8 @@ function PlayerPageInner() {
                 {inputFound ? (
                   <WalletSelector
                     mode="sign-psbt"
-                    psbtBase64={publishedPsbt}
-                    inputIndex={myInputIndex}
+                    psbtBase64={myFragment}
+                    inputIndex={0}
                     betAmount={betAmount}
                     onSignComplete={handlePsbtSigned}
                     onManualSign={handlePsbtManual}
@@ -789,9 +793,8 @@ function PlayerPageInner() {
                 ) : (
                   <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
                     <p className="font-mono text-xs text-glitch leading-relaxed">
-                      Your input was not found in this transaction. The presenter
-                      may have rebuilt the PSBT after you joined. Please wait for
-                      an updated transaction or rejoin the game.
+                      {buildError ??
+                        "Waiting for the presenter's transaction so we can read the escrow address."}
                     </p>
                   </div>
                 )}

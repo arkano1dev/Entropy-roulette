@@ -3,6 +3,15 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import * as bitcoin from "bitcoinjs-lib";
+import {
+  buildParticipantPsbt,
+  assembleCoinjoin,
+  assertReadyToFinalize,
+  perParticipantFee,
+  presenterFee,
+} from "@/lib/bitcoin/psbt-combine";
+import { validateAssembledSignatures } from "@/lib/bitcoin/psbt-verify";
+import type { UTXO } from "@/lib/game/types";
 
 const network = bitcoin.networks.bitcoin;
 
@@ -150,6 +159,61 @@ function handleAddPlayer(body: Record<string, unknown>) {
   };
 }
 
+// Build one participant's coinjoin fragment: a 1-in/1-out PSBT with the input
+// flagged SIGHASH_SINGLE|ANYONECANPAY and the output paying escrow (input − fee).
+// The caller then signs it in their wallet. `role` decides the fee: a presenter
+// (input #0) also covers the shared tx overhead + OP_RETURN.
+function handleBuildParticipant(body: Record<string, unknown>) {
+  const { utxo, escrowAddress, feeRate = 10, role = "player", opReturnData } = body as {
+    utxo: UTXO;
+    escrowAddress: string;
+    feeRate?: number;
+    role?: "player" | "presenter";
+    opReturnData?: string;
+  };
+
+  if (!utxo) throw new Error("utxo is required");
+  if (!escrowAddress) throw new Error("escrowAddress is required");
+
+  const opReturnBytes = opReturnData ? Buffer.from(opReturnData, "utf8").length : 0;
+  const feeSats =
+    role === "presenter"
+      ? presenterFee(Number(feeRate), opReturnBytes)
+      : perParticipantFee(Number(feeRate));
+
+  const result = buildParticipantPsbt({ utxo, escrowAddress, feeSats });
+  return {
+    psbtBase64: result.psbtBase64,
+    psbtHex: Buffer.from(result.psbtBase64, "base64").toString("hex"),
+    escrowValue: result.escrowValue,
+    fee: result.fee,
+    role,
+  };
+}
+
+// Assemble many signed participant fragments into one coinjoin transaction and
+// verify every signature survived the merge.
+function handleAssemble(body: Record<string, unknown>) {
+  const { fragments, escrowAddress, opReturnData } = body as {
+    fragments: string[];
+    escrowAddress: string;
+    opReturnData?: string;
+  };
+
+  if (!fragments?.length) throw new Error("fragments array is required");
+  if (!escrowAddress) throw new Error("escrowAddress is required");
+
+  const result = assembleCoinjoin(fragments, { escrowAddress, opReturnData });
+  const signatures = validateAssembledSignatures(result.psbtBase64);
+
+  return {
+    ...result,
+    psbtHex: Buffer.from(result.psbtBase64, "base64").toString("hex"),
+    signaturesValid: signatures.valid,
+    signaturesError: signatures.error,
+  };
+}
+
 function handleCombine(body: Record<string, unknown>) {
   const { psbts } = body as { psbts: string[] };
   if (!psbts?.length) throw new Error("psbts array is required");
@@ -170,6 +234,9 @@ function handleCombine(body: Record<string, unknown>) {
 function handleFinalize(body: Record<string, unknown>) {
   const { psbtBase64 } = body as { psbtBase64: string };
   if (!psbtBase64) throw new Error("psbtBase64 is required");
+
+  // Fail clearly (listing unsigned inputs) instead of an opaque bitcoinjs error.
+  assertReadyToFinalize(psbtBase64);
 
   const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network });
   psbt.finalizeAllInputs();
@@ -270,8 +337,14 @@ export async function POST(request: NextRequest) {
       case "build":
         result = handleBuild(body);
         break;
+      case "build-participant":
+        result = handleBuildParticipant(body);
+        break;
       case "add-player":
         result = handleAddPlayer(body);
+        break;
+      case "assemble":
+        result = handleAssemble(body);
         break;
       case "combine":
         result = handleCombine(body);

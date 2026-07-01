@@ -160,88 +160,94 @@ export default function PresenterPage() {
     longPulse();
   };
 
-  // Handle signature collection — builds PSBT via /api/psbt
+  // Handle signature collection — builds the presenter's coinjoin fragment and
+  // publishes it so players can read the escrow address and sign their own.
+  // (Full sign + assemble + broadcast lives in the BUILD PSBT tab / PsbtBuilder.)
   const handleCollectSignatures = async () => {
     if (!session || !walletState?.address) return;
 
-    addLog("system", "Building PSBT...");
+    if (!presenterUtxo) {
+      addLog("error", "No presenter UTXO — restart the game from setup.");
+      return;
+    }
+
+    addLog("system", "Building presenter fragment (input #0)...");
 
     try {
-      const playersWithUtxo = session.players.filter((p) => p.utxo);
-
-      if (playersWithUtxo.length === 0) {
-        addLog(
-          "error",
-          "No player inputs yet — players must confirm a bet (which fetches their UTXO) before you can build."
-        );
-        return;
-      }
-      // Build escrow PSBT via real API route
       const res = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "build",
-          players: playersWithUtxo.map((p) => ({ utxo: p.utxo })),
+          action: "build-participant",
+          utxo: presenterUtxo,
           escrowAddress: walletState.address,
           feeRate,
+          role: "presenter",
           opReturnData: opReturnMessage.trim() || undefined,
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      const escrowPsbt = data.data.psbtBase64;
-      setCurrentPsbt(escrowPsbt);
-      addLog("info", `PSBT built: ${data.data.inputCount} inputs → escrow`);
+      const presenterFragment = data.data.psbtBase64;
+      setCurrentPsbt(presenterFragment);
+      addLog("info", `Presenter fragment built → escrow (${data.data.escrowValue.toLocaleString()} sats, fee ${data.data.fee.toLocaleString()})`);
       if (opReturnMessage.trim()) {
         addLog("info", `OP_RETURN embedded: "${opReturnMessage.trim()}"`);
       }
-      addLog("info", `Fee: ${data.data.estimatedFee.toLocaleString()} sats`);
 
-      // Publish PSBT to Nostr for players
-      await publishPsbtForSigning(escrowPsbt);
-      addLog("success", "PSBT published to Nostr for players");
+      // Publish so players can read the escrow address and build their fragments.
+      await publishPsbtForSigning(presenterFragment);
+      addLog("success", "Presenter fragment published — open BUILD PSBT to sign & assemble");
 
       await collectSignatures();
-      addLog("info", "Waiting for all players to sign their inputs...");
+      addLog("info", "Waiting for players to sign their own inputs...");
       longPulse();
     } catch (err) {
-      addLog("error", `Failed to build PSBT: ${err}`);
+      addLog("error", `Failed to build presenter fragment: ${err}`);
     }
   };
 
-  // Handle PSBT finalization
+  // Handle PSBT finalization — assemble the coinjoin then finalize.
+  // `currentPsbt` must be the presenter's SIGNED fragment (set once the presenter
+  // signs input #0 in the BUILD PSBT tab).
   const handleFinalize = async () => {
-    if (!session || session.players.length === 0 || !currentPsbt) return;
+    if (!session || !currentPsbt || !walletState?.address) return;
 
     try {
-      addLog("system", "Finalizing PSBT...");
+      addLog("system", "Assembling coinjoin...");
 
       const signedPsbts = session.players
         .map((p) => p.signedPsbt)
         .filter(Boolean) as string[];
 
-      if (signedPsbts.length === 0) {
-        addLog("error", "No player signatures found");
-        return;
-      }
-
-      const allPsbts = [currentPsbt, ...signedPsbts];
-      const combineRes = await fetch("/api/psbt", {
+      const assembleRes = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "combine", psbts: allPsbts }),
+        body: JSON.stringify({
+          action: "assemble",
+          fragments: [currentPsbt, ...signedPsbts],
+          escrowAddress: walletState.address,
+          opReturnData: opReturnMessage.trim() || undefined,
+        }),
       });
-      const combineData = await combineRes.json();
-      if (!combineData.success) throw new Error(combineData.error);
+      const assembleData = await assembleRes.json();
+      if (!assembleData.success) throw new Error(assembleData.error);
+      addLog("info", `Assembled ${assembleData.data.includedCount} input(s); fee ${assembleData.data.fee.toLocaleString()} sats`);
+      if (assembleData.data.rejected?.length) {
+        addLog("warning", `${assembleData.data.rejected.length} fragment(s) rejected`);
+      }
+      if (!assembleData.data.signaturesValid) {
+        addLog("error", `Signatures invalid: ${assembleData.data.signaturesError ?? "verification failed"}`);
+        return;
+      }
 
       const finalRes = await fetch("/api/psbt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "finalize",
-          psbtBase64: combineData.data.psbtBase64,
+          psbtBase64: assembleData.data.psbtBase64,
         }),
       });
       const finalData = await finalRes.json();
@@ -595,7 +601,16 @@ export default function PresenterPage() {
                     opReturnText={opReturnMessage.trim()}
                     onPsbtBuilt={(psbt) => {
                       setCurrentPsbt(psbt);
-                      addLog("info", "PSBT built — publishing to players for signing");
+                      // Publish the presenter fragment so players can read the
+                      // escrow address from it and build their own fragments.
+                      publishPsbtForSigning(psbt).catch(() => {});
+                      collectSignatures().catch(() => {});
+                      addLog("info", "Presenter fragment published — players can sign");
+                    }}
+                    onPresenterSigned={(signed) => {
+                      // Keep the presenter's SIGNED fragment as the assembly base.
+                      setCurrentPsbt(signed);
+                      addLog("success", "Presenter signed input #0");
                     }}
                     onFinalized={(rawTx, finalTxid) => {
                       setTxid(finalTxid);
