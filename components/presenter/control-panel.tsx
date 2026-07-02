@@ -28,7 +28,9 @@ export function ControlPanel({
   onBroadcast,
   isLoading,
 }: ControlPanelProps) {
-  const allSigned = signedCount === playerCount && playerCount > 0;
+  // All joined players have signed (a solo presenter with 0 players can finalize
+  // too — the presenter signs their own input #0 as part of finalize).
+  const allSigned = signedCount === playerCount;
 
   return (
     <div className="bg-background/80 border border-border rounded-lg p-6">

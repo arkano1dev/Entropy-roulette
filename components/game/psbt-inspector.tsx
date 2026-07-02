@@ -13,9 +13,20 @@ interface PSBTInspectorProps {
   players: Player[];
   feeRate: number;
   phase: string;
+  /** Whether input #0 is the presenter's (so player rows start at input #1). */
+  presenterInput?: boolean;
+  /** Whether the presenter has signed input #0 (preview PSBTs are unsigned). */
+  presenterSigned?: boolean;
 }
 
-export function PSBTInspector({ psbtBase64, players, feeRate, phase }: PSBTInspectorProps) {
+export function PSBTInspector({
+  psbtBase64,
+  players,
+  feeRate,
+  phase,
+  presenterInput = false,
+  presenterSigned = false,
+}: PSBTInspectorProps) {
   const [showRawHex, setShowRawHex] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -46,17 +57,25 @@ export function PSBTInspector({ psbtBase64, players, feeRate, phase }: PSBTInspe
   const estimatedFee = calculateFee(details.inputCount, details.outputCount, feeRate);
   const actualFee = Number(details.feeSats);
 
-  // Map players to inputs
+  // Map inputs to signers. When the presenter holds input #0, player rows begin
+  // at input #1 (so players[0] is input #1, etc.).
   const inputRows = details.inputs.map((input, index) => {
-    const player = players[index];
-    const signed = player?.signedPsbt ? true : false;
+    const isPresenter = presenterInput && index === 0;
+    const player = isPresenter ? undefined : players[presenterInput ? index - 1 : index];
+    // `input.signed` is true once the actual PSBT carries a signature (finalized
+    // tx); for the unsigned preview we fall back to session-level signed state.
+    const signed = isPresenter
+      ? input.signed || presenterSigned
+      : input.signed || !!player?.signedPsbt;
     return {
       index,
       txid: input.txid,
       vout: input.vout,
       value: Number(input.value),
       signed,
-      playerName: player?.displayName || `Input ${index}`,
+      playerName: isPresenter
+        ? "Presenter (input #0)"
+        : player?.displayName || `Input ${index}`,
     };
   });
 

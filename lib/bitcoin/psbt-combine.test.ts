@@ -227,6 +227,50 @@ describe("coinjoin assembly", () => {
     expect(() => assertReadyToFinalize(psbt.toBase64())).toThrow(/unsigned/i);
   });
 
+  it("chains a Tx 2 payout spending the finalized escrow outputs", () => {
+    // Assemble + finalize Tx 1.
+    const presenter = signedFragment(0x10, 50000);
+    const a = signedFragment(0x11, 30000);
+    const res = assembleCoinjoin([presenter.frag, a.frag], { escrowAddress: ESCROW_ADDRESS });
+    const psbt1 = bitcoin.Psbt.fromBase64(res.psbtBase64, { network });
+    psbt1.finalizeAllInputs();
+    const tx1hex = psbt1.extractTransaction().toHex();
+
+    // Build Tx 2 from Tx 1's raw hex (mirrors the build-payout API handler).
+    const parsed = bitcoin.Transaction.fromHex(tx1hex);
+    const txid1 = parsed.getId();
+    const escrowScript = Buffer.from(bitcoin.address.toOutputScript(ESCROW_ADDRESS, network));
+    const psbt2 = new bitcoin.Psbt({ network });
+    let total = BigInt(0);
+    let count = 0;
+    parsed.outs.forEach((out, vout) => {
+      const script = Buffer.from(out.script);
+      if (script[0] === bitcoin.opcodes.OP_RETURN) return;
+      if (!script.equals(escrowScript)) return;
+      psbt2.addInput({
+        hash: txid1,
+        index: vout,
+        witnessUtxo: { script: Uint8Array.from(script), value: BigInt(out.value) },
+      });
+      total += BigInt(out.value);
+      count++;
+    });
+    expect(count).toBe(2); // presenter escrow + player escrow
+
+    const fee = BigInt(estimateTxSize(count, 1) * 3);
+    const winner = makeParticipant(0x99, 1);
+    psbt2.addOutput({ address: winner.address, value: total - fee });
+
+    // The presenter controls the escrow address → signs every Tx 2 input.
+    for (let i = 0; i < count; i++) psbt2.signInput(i, escrow.kp);
+    const valid = psbt2.validateSignaturesOfAllInputs((pk, mh, sig) => ecc.verify(mh, pk, sig));
+    expect(valid).toBe(true);
+    psbt2.finalizeAllInputs();
+    const tx2 = psbt2.extractTransaction();
+    expect(tx2.ins.length).toBe(2);
+    expect(tx2.outs.length).toBe(1);
+  });
+
   it("works with a single presenter fragment (zero players)", () => {
     const presenter = signedFragment(0x10, 50000);
     const res = assembleCoinjoin([presenter.frag], { escrowAddress: ESCROW_ADDRESS });

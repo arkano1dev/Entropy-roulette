@@ -214,6 +214,69 @@ function handleAssemble(body: Record<string, unknown>) {
   };
 }
 
+// Build Tx 2 (payout): spend every escrow output of the finalized Tx 1 (all pay
+// the presenter's escrow address) into a single output to the winner. The txid
+// of Tx 1 is fixed once it is finalized, so this can be built (and signed)
+// before Tx 1 is broadcast.
+function handleBuildPayout(body: Record<string, unknown>) {
+  const { tx1Hex, escrowAddress, winnerAddress, feeRate = 10 } = body as {
+    tx1Hex: string;
+    escrowAddress: string;
+    winnerAddress: string;
+    feeRate?: number;
+  };
+
+  if (!tx1Hex) throw new Error("tx1Hex is required");
+  if (!escrowAddress) throw new Error("escrowAddress is required");
+  if (!winnerAddress) throw new Error("winnerAddress is required");
+
+  const tx1 = bitcoin.Transaction.fromHex(tx1Hex);
+  const txid1 = tx1.getId();
+  const escrowScript = addressToScript(escrowAddress);
+
+  const psbt = new bitcoin.Psbt({ network });
+  let total = BigInt(0);
+  let count = 0;
+
+  tx1.outs.forEach((out, vout) => {
+    const script = Buffer.from(out.script);
+    if (script[0] === bitcoin.opcodes.OP_RETURN) return; // skip OP_RETURN
+    if (escrowScript && !script.equals(escrowScript)) return; // only escrow outputs
+    psbt.addInput({
+      hash: txid1,
+      index: vout,
+      sequence: 0xfffffffd,
+      witnessUtxo: { script: Uint8Array.from(script), value: BigInt(out.value) },
+    });
+    total += BigInt(out.value);
+    count++;
+  });
+
+  if (count === 0) throw new Error("No escrow outputs found in Tx 1");
+
+  const fee = BigInt(estimateFee(count, 1, Number(feeRate)));
+  const payout = total - fee;
+  if (payout < BigInt(546)) throw new Error(`Payout below dust after fee: ${payout} sats`);
+
+  const winnerScript = addressToScript(winnerAddress);
+  if (winnerScript) {
+    psbt.addOutput({ script: Uint8Array.from(winnerScript), value: payout });
+  } else {
+    psbt.addOutput({ address: winnerAddress, value: payout });
+  }
+
+  const psbtBase64 = psbt.toBase64();
+  return {
+    psbtBase64,
+    psbtHex: Buffer.from(psbtBase64, "base64").toString("hex"),
+    txid1,
+    inputCount: count,
+    totalIn: Number(total),
+    payout: Number(payout),
+    fee: Number(fee),
+  };
+}
+
 function handleCombine(body: Record<string, unknown>) {
   const { psbts } = body as { psbts: string[] };
   if (!psbts?.length) throw new Error("psbts array is required");
@@ -345,6 +408,9 @@ export async function POST(request: NextRequest) {
         break;
       case "assemble":
         result = handleAssemble(body);
+        break;
+      case "build-payout":
+        result = handleBuildPayout(body);
         break;
       case "combine":
         result = handleCombine(body);

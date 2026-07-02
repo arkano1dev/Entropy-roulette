@@ -40,6 +40,11 @@ export function usePresenterGame() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unsubscribesRef = useRef<Array<() => void>>([]);
+  // Bumping this tears down and re-creates the relay subscriptions — a manual
+  // "Resync" so a fresh subscription immediately catches the players' next
+  // heartbeat if the presenter missed their original ephemeral events.
+  const [resyncNonce, setResyncNonce] = useState(0);
+  const resync = useCallback(() => setResyncNonce((n) => n + 1), []);
 
   // Initialize a new game
   const initializeGame = useCallback(async () => {
@@ -125,6 +130,35 @@ export function usePresenterGame() {
       setError(
         err instanceof Error ? err.message : "Failed to collect signatures"
       );
+    }
+  }, [session, keypair]);
+
+  // Move the game back to COLLECTING_SIGNATURES after a rebuild. Bypasses the
+  // normal forward-only phase validation and clears finalized artifacts so the
+  // control panel stops showing "Finalized / Broadcast" once the presenter
+  // returns to the build step. No-op unless we are actually past collecting.
+  const resetForRebuild = useCallback(async () => {
+    if (!session || !keypair) return;
+    if (session.phase !== "FINALIZED" && session.phase !== "BROADCAST") return;
+    try {
+      const updated: GameSession = {
+        ...session,
+        phase: "COLLECTING_SIGNATURES",
+        finalizedPsbt: undefined,
+        rawTx: undefined,
+        txid: undefined,
+      };
+      setSession(updated);
+      await publishGameSession(keypair.secretKey, updated);
+      await publishGameState(
+        keypair.secretKey,
+        updated.id,
+        updated.phase,
+        calculateTotalPot(updated),
+        updated.players.length
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reset for rebuild");
     }
   }, [session, keypair]);
 
@@ -324,7 +358,7 @@ export function usePresenterGame() {
       unsubscribesRef.current.forEach((unsub) => unsub());
       unsubscribesRef.current = [];
     };
-  }, [session?.id, keypair, handlePlayerJoin, handlePsbtFragment]);
+  }, [session?.id, keypair, handlePlayerJoin, handlePsbtFragment, resyncNonce]);
 
   return {
     session,
@@ -339,6 +373,8 @@ export function usePresenterGame() {
     broadcastTx,
     confirmAndResolve,
     publishPsbtForSigning,
+    resetForRebuild,
+    resync,
     totalPot: session ? calculateTotalPot(session) : 0,
   };
 }
@@ -362,6 +398,15 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const unsubscribesRef = useRef<Array<() => void>>([]);
+  // Last join details + signed fragment, kept so the heartbeat below can
+  // re-broadcast them (PLAYER_JOIN / PSBT_FRAGMENT are ephemeral Nostr events).
+  const joinInfoRef = useRef<{
+    amount: number;
+    receivingAddress: string;
+    displayName: string;
+    utxo?: any;
+  } | null>(null);
+  const signedPsbtRef = useRef<string | null>(null);
 
   // Initialize player keypair
   useEffect(() => {
@@ -379,6 +424,8 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
         const name = displayName || generateAnonymousName();
 
         setPlayerId(id);
+        // Remember join details so the heartbeat can re-announce this player.
+        joinInfoRef.current = { amount, receivingAddress, displayName: name, utxo };
 
         await publishPlayerJoin(
           keypair.secretKey,
@@ -404,6 +451,8 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
       if (!keypair || !playerId) return;
 
       try {
+        // Remember it so the heartbeat can re-broadcast the signature too.
+        signedPsbtRef.current = signedPsbt;
         await publishPsbtFragment(
           keypair.secretKey,
           gameId,
@@ -416,6 +465,40 @@ export function usePlayerGame(gameId: string, presenterPubkey: string) {
     },
     [gameId, keypair, playerId]
   );
+
+  // Heartbeat: PLAYER_JOIN and PSBT_FRAGMENT are ephemeral — relays never replay
+  // them, so a presenter who subscribed late or dropped a relay would never see
+  // this player. Re-broadcasting the join (and the signed fragment, once signed)
+  // every few seconds until the game completes makes it self-healing.
+  useEffect(() => {
+    if (!keypair || !playerId || !isJoined || phase === "COMPLETE") return;
+
+    const beat = () => {
+      const info = joinInfoRef.current;
+      if (info) {
+        publishPlayerJoin(
+          keypair.secretKey,
+          gameId,
+          playerId,
+          info.displayName,
+          info.amount,
+          info.receivingAddress,
+          info.utxo
+        ).catch(() => {});
+      }
+      if (signedPsbtRef.current) {
+        publishPsbtFragment(
+          keypair.secretKey,
+          gameId,
+          playerId,
+          signedPsbtRef.current
+        ).catch(() => {});
+      }
+    };
+
+    const interval = setInterval(beat, 8000);
+    return () => clearInterval(interval);
+  }, [keypair, playerId, isJoined, phase, gameId]);
 
   // Subscribe to game events
   useEffect(() => {

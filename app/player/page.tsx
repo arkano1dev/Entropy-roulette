@@ -6,11 +6,15 @@ import { useSearchParams } from "next/navigation";
 import { WalletSelector, type WalletSignResult } from "@/components/wallet/wallet-selector";
 import { usePlayerGame, useHaptic } from "@/hooks/use-game";
 import { formatSats } from "@/lib/bitcoin/wallet-connect";
-import { getFeeEstimates, getSpendableUTXO } from "@/lib/bitcoin/mempool-api";
+import {
+  getFeeEstimates,
+  getAddressUTXOs,
+  getOutputScriptPubKey,
+  type MempoolUTXO,
+} from "@/lib/bitcoin/mempool-api";
 import { decodePsbt } from "@/lib/bitcoin/psbt-engine";
 import { buildParticipantPsbt, perParticipantFee } from "@/lib/bitcoin/psbt-combine";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { WalletId } from "@/components/wallet/wallet-selector";
 import { ChevronDown, Check } from "lucide-react";
 
@@ -19,7 +23,7 @@ import { ChevronDown, Check } from "lucide-react";
 // ---------------------------------------------------------------------------
 // scroll       → read the long-form content page, single CTA at bottom
 // sign-message → pick wallet, sign ownership message, registers in lobby
-// bet          → set bet amount (min 5000 sats)
+// bet          → pick which coin (UTXO) to stake — whole coin goes into the pot
 // wait         → idle; when publishedPsbt arrives, inline sign-psbt appears
 // result       → win / lose
 // ---------------------------------------------------------------------------
@@ -360,8 +364,13 @@ function PlayerPageInner() {
   const { longPulse, victoryPulse, defeatPulse } = useHaptic();
 
   const [step, setStep] = useState<PlayerStep>("scroll");
-  const [betAmount, setBetAmount] = useState(5000);
-  const [betInputStr, setBetInputStr] = useState("5000");
+  // The committed amount = the value of the selected coin (whole UTXO goes in).
+  const [betAmount, setBetAmount] = useState(0);
+  // Coin picker: the player's available UTXOs and the one they choose to stake.
+  const [utxos, setUtxos] = useState<MempoolUTXO[] | null>(null);
+  const [selectedUtxo, setSelectedUtxo] = useState<MempoolUTXO | null>(null);
+  const [isLoadingUtxos, setIsLoadingUtxos] = useState(false);
+  const [utxoError, setUtxoError] = useState<string | null>(null);
   const [feeRate, setFeeRate] = useState(10);
   const [joinedAddress, setJoinedAddress] = useState("");
   const [joinedUtxo, setJoinedUtxo] = useState<{
@@ -433,28 +442,49 @@ function PlayerPageInner() {
     longPulse();
   };
 
-  // ── Step: bet confirmed → fetch UTXO → register → wait ────────────────────
-  const handleBetConfirmed = async () => {
-    if (betAmount < 5000) return;
+  // ── Step: bet — load the player's coins to choose from ────────────────────
+  useEffect(() => {
+    if (step !== "bet" || !joinedAddress) return;
+    setIsLoadingUtxos(true);
+    setUtxoError(null);
+    setSelectedUtxo(null);
+    getAddressUTXOs(joinedAddress)
+      .then((list) => {
+        // Confirmed first, then largest value first.
+        const sorted = [...list].sort((a, b) => {
+          const conf = (a.status.confirmed ? 0 : 1) - (b.status.confirmed ? 0 : 1);
+          return conf !== 0 ? conf : b.value - a.value;
+        });
+        setUtxos(sorted);
+      })
+      .catch((e) => setUtxoError(e instanceof Error ? e.message : "Failed to load coins"))
+      .finally(() => setIsLoadingUtxos(false));
+  }, [step, joinedAddress]);
+
+  // ── Step: coin selected → enrich with scriptPubKey → register → wait ──────
+  const handleCoinConfirmed = async () => {
+    if (!selectedUtxo) return;
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      // Fetch a real spendable UTXO from the player's wallet address that
-      // covers the bet. This UTXO becomes the player's INPUT in the
-      // presenter's PSBT — without it the presenter has nothing to include
-      // or to collect a signature against.
-      const utxo = await getSpendableUTXO(joinedAddress, betAmount);
-      setJoinedUtxo(utxo);
+      // The whole selected UTXO becomes the player's INPUT. Enrich it with the
+      // scriptPubKey needed to build the PSBT input.
+      const scriptPubKey = await getOutputScriptPubKey(selectedUtxo.txid, selectedUtxo.vout);
+      const enriched = {
+        txid: selectedUtxo.txid,
+        vout: selectedUtxo.vout,
+        value: selectedUtxo.value,
+        scriptPubKey,
+      };
+      setJoinedUtxo(enriched);
+      setBetAmount(selectedUtxo.value);
 
-      // Register the player, carrying the UTXO so the presenter can add it
-      // as an input and build/extend the transaction.
-      await joinGame(betAmount, joinedAddress, undefined, utxo);
+      // Register the player, carrying the UTXO so the presenter can splice it in.
+      await joinGame(selectedUtxo.value, joinedAddress, undefined, enriched);
       setStep("wait");
       longPulse();
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Failed to join game"
-      );
+      setSubmitError(err instanceof Error ? err.message : "Failed to join game");
     } finally {
       setIsSubmitting(false);
     }
@@ -584,72 +614,100 @@ function PlayerPageInner() {
     );
   }
 
-  // ── Render: bet ───────────────────────────────────────────────────────────
+  // ── Render: bet — pick which coin (UTXO) to stake ─────────────────────────
   if (step === "bet") {
+    const fee = perParticipantFee(feeRate);
+    const isSelected = (u: MempoolUTXO) =>
+      selectedUtxo?.txid === u.txid && selectedUtxo?.vout === u.vout;
+
     return (
       <div className="min-h-screen bg-background flex flex-col">
-        <StepHeader stepLabel="Set your bet" onBack={() => setStep("sign-message")} />
+        <StepHeader stepLabel="Choose your coin" onBack={() => setStep("sign-message")} />
         <div className="flex-1 flex flex-col justify-center px-4 py-8 max-w-md mx-auto w-full space-y-4">
           <div className="space-y-1">
-            <h2 className="font-mono text-xl text-neon">How much are you betting?</h2>
+            <h2 className="font-mono text-xl text-neon">Pick the coin to stake</h2>
             <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-              This is the amount from your wallet that goes into the pot.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="font-mono text-xs text-muted-foreground uppercase">
-              Bet amount (sats)
-            </label>
-            <Input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              value={betInputStr}
-              onChange={(e) => {
-                const raw = e.target.value.replace(/\D/g, "");
-                setBetInputStr(raw);
-                const parsed = parseInt(raw, 10);
-                setBetAmount(isNaN(parsed) ? 0 : parsed);
-              }}
-              onBlur={() => {
-                if (!betInputStr || parseInt(betInputStr, 10) < 5000) {
-                  setBetInputStr("5000");
-                  setBetAmount(5000);
-                }
-              }}
-              className="font-mono text-neon text-lg"
-            />
-            <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-neon">{formatSats(betAmount)}</span>
-              <span className="text-muted-foreground">
-                = {(betAmount / 100_000_000).toFixed(8)} BTC
-              </span>
-            </div>
-          </div>
-
-          {/* Why 5000 sat minimum */}
-          <div className="p-3 bg-muted/20 rounded-lg space-y-1">
-            <div className="font-mono text-xs text-neon">Why 5,000 sat minimum?</div>
-            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-              Bitcoin has a <span className="text-foreground">dust limit</span> —
-              outputs below ~546 sats are rejected by most nodes as
-              uneconomical to relay. The 5,000 sat minimum ensures your input
-              is large enough to cover the fee and produce a valid output,
-              regardless of which fee rate the presenter uses.
+              The <span className="text-foreground">entire coin you select</span> goes into the
+              pot, minus the network fee. There is no change output, so choose a coin close to
+              the amount you want to bet.
             </p>
           </div>
 
           <div className="p-3 bg-muted/20 rounded-lg flex items-center justify-between">
-            <span className="font-mono text-xs text-muted-foreground">Current fee rate</span>
-            <span className="font-mono text-xs text-neon">{feeRate} sat/vB</span>
+            <span className="font-mono text-xs text-muted-foreground">Fee rate</span>
+            <span className="font-mono text-xs text-neon">
+              {feeRate} sat/vB → fee {formatSats(fee)}
+            </span>
           </div>
 
-          {betAmount < 5000 && (
+          {isLoadingUtxos && (
+            <div className="flex items-center gap-2 justify-center py-6">
+              <motion.div
+                className="w-4 h-4 border-2 border-neon border-t-transparent rounded-full"
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+              />
+              <span className="font-mono text-xs text-muted-foreground">Loading your coins…</span>
+            </div>
+          )}
+
+          {utxoError && (
             <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
-              <p className="font-mono text-xs text-glitch">
-                Minimum bet is 5,000 sats.
+              <p className="font-mono text-xs text-glitch">{utxoError}</p>
+            </div>
+          )}
+
+          {utxos && utxos.length === 0 && (
+            <div className="p-3 bg-glitch/10 border border-glitch/30 rounded-lg">
+              <p className="font-mono text-xs text-glitch leading-relaxed">
+                No coins found for this wallet. Fund the address first, then go back and retry.
               </p>
+            </div>
+          )}
+
+          {utxos && utxos.length > 0 && (
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {utxos.map((u) => {
+                const potContribution = u.value - fee;
+                const viable = potContribution > 546;
+                const sel = isSelected(u);
+                return (
+                  <button
+                    key={`${u.txid}:${u.vout}`}
+                    disabled={!viable}
+                    onClick={() => {
+                      setSelectedUtxo(u);
+                      setBetAmount(u.value);
+                    }}
+                    className={`w-full text-left p-3 rounded-lg border transition-all ${
+                      sel
+                        ? "border-neon bg-neon/10"
+                        : viable
+                        ? "border-border bg-muted/10 hover:border-neon/50"
+                        : "border-border bg-muted/5 opacity-50 cursor-not-allowed"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-sm text-neon">{formatSats(u.value)}</span>
+                      <span
+                        className={`font-mono text-[10px] ${
+                          u.status.confirmed ? "text-muted-foreground" : "text-glitch"
+                        }`}
+                      >
+                        {u.status.confirmed ? "confirmed" : "unconfirmed"}
+                      </span>
+                    </div>
+                    <div className="font-mono text-[10px] text-muted-foreground mt-0.5 break-all">
+                      {u.txid.slice(0, 16)}…:{u.vout}
+                      {viable ? (
+                        <span className="text-neon"> → {formatSats(potContribution)} to pot</span>
+                      ) : (
+                        <span className="text-glitch"> — too small for fee</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -660,12 +718,16 @@ function PlayerPageInner() {
           )}
 
           <Button
-            onClick={handleBetConfirmed}
-            disabled={betAmount < 5000 || isSubmitting}
+            onClick={handleCoinConfirmed}
+            disabled={!selectedUtxo || isSubmitting}
             className="w-full bg-neon text-background hover:bg-neon/80 font-mono py-6"
             size="lg"
           >
-            {isSubmitting ? "Joining game..." : `Confirm bet — ${formatSats(betAmount)}`}
+            {isSubmitting
+              ? "Joining game..."
+              : selectedUtxo
+              ? `Stake ${formatSats(selectedUtxo.value)}`
+              : "Select a coin"}
           </Button>
         </div>
       </div>

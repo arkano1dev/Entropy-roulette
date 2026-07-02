@@ -7,7 +7,7 @@
 //  - Multi-player signing: each player adds their input/output then signs
 //  - Presenter can combine all fragments, finalize, and broadcast
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,8 @@ interface PsbtBuilderProps {
   onPsbtBuilt: (psbtBase64: string) => void;
   /** Called after the presenter signs their own input #0 (the signed fragment). */
   onPresenterSigned?: (signedPsbtBase64: string) => void;
+  /** Reports the builder's current step so the page can keep the game phase in sync. */
+  onStepChange?: (step: "build" | "inspect" | "finalize" | "broadcast" | "done") => void;
   onFinalized: (rawTx: string, txid: string) => void;
   /** Called after the raw tx is successfully broadcast to the Bitcoin network. */
   onBroadcasted?: (txid: string) => void;
@@ -50,6 +52,7 @@ export function PsbtBuilder({
   opReturnText,
   onPsbtBuilt,
   onPresenterSigned,
+  onStepChange,
   onFinalized,
   onBroadcasted,
 }: PsbtBuilderProps) {
@@ -67,6 +70,12 @@ export function PsbtBuilder({
   // OP_RETURN is entered just before finalize, at the end of the presentation.
   // The field is seeded from the prop (empty until the presenter fills it in).
   const [opReturnLocal, setOpReturnLocal] = useState(opReturnText ?? "");
+
+  // Report the current step up so the page can keep the shared game phase in
+  // sync — e.g. reset "Finalized" back to "Collecting" when we remount to build.
+  useEffect(() => {
+    onStepChange?.(step);
+  }, [step, onStepChange]);
 
   // Coinjoin model: the presenter builds only their OWN 1-in/1-out fragment
   // (input #0). Each player builds and signs their own fragment independently.
@@ -473,7 +482,7 @@ export function PsbtBuilder({
               {isBusy
                 ? "FINALIZING..."
                 : readyToFinalize
-                ? "FINALIZE & BROADCAST"
+                ? "FINALIZE PSBT"
                 : !presenterSigned
                 ? "SIGN YOUR INPUT FIRST"
                 : `WAITING FOR PLAYERS (${signedCount}/${playersWithUtxo.length})`}
