@@ -14,6 +14,28 @@ import { validateAssembledSignatures } from "@/lib/bitcoin/psbt-verify";
 import type { UTXO } from "@/lib/game/types";
 
 const network = bitcoin.networks.bitcoin;
+const MAX_PSBT_BYTES = 1_000_000;
+const MAX_FRAGMENTS = 100;
+const MAX_PLAYERS = 100;
+const MAX_FEE_RATE = 1_000;
+
+function assertString(value: unknown, field: string, maxLength = 10_000): asserts value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) {
+    throw new Error(`${field} must be a non-empty string under ${maxLength} characters`);
+  }
+}
+
+function assertSats(value: unknown, field: string): asserts value is number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive safe integer`);
+  }
+}
+
+function assertFeeRate(value: unknown): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > MAX_FEE_RATE) {
+    throw new Error(`feeRate must be between 0 and ${MAX_FEE_RATE}`);
+  }
+}
 
 function addressToScript(address: string): Buffer | null {
   try {
@@ -61,8 +83,12 @@ function handleBuild(body: Record<string, unknown>) {
     opReturnData?: string;
   };
 
-  if (!players?.length) throw new Error("players array is required");
-  if (!escrowAddress) throw new Error("escrowAddress is required");
+  if (!Array.isArray(players) || players.length === 0 || players.length > MAX_PLAYERS) {
+    throw new Error(`players must contain between 1 and ${MAX_PLAYERS} entries`);
+  }
+  assertString(escrowAddress, "escrowAddress", 128);
+  assertFeeRate(feeRate);
+  if (opReturnData !== undefined) assertString(opReturnData, "opReturnData", 80);
 
   const psbt = new bitcoin.Psbt({ network });
   let totalInput = BigInt(0);
@@ -200,8 +226,12 @@ function handleAssemble(body: Record<string, unknown>) {
     opReturnData?: string;
   };
 
-  if (!fragments?.length) throw new Error("fragments array is required");
-  if (!escrowAddress) throw new Error("escrowAddress is required");
+  if (!Array.isArray(fragments) || fragments.length === 0 || fragments.length > MAX_FRAGMENTS) {
+    throw new Error(`fragments must contain between 1 and ${MAX_FRAGMENTS} entries`);
+  }
+  assertString(escrowAddress, "escrowAddress", 128);
+  if (opReturnData !== undefined) assertString(opReturnData, "opReturnData", 80);
+  fragments.forEach((fragment, index) => assertString(fragment, `fragments[${index}]`, MAX_PSBT_BYTES));
 
   const result = assembleCoinjoin(fragments, { escrowAddress, opReturnData });
   const signatures = validateAssembledSignatures(result.psbtBase64);
@@ -387,7 +417,15 @@ function handleDecode(body: Record<string, unknown>) {
 
 export async function POST(request: NextRequest) {
   try {
+    const contentLength = Number(request.headers.get("content-length") ?? 0);
+    if (contentLength > MAX_PSBT_BYTES) {
+      return NextResponse.json({ success: false, error: "Request body is too large" }, { status: 413 });
+    }
+
     const body = await request.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ success: false, error: "Request body must be an object" }, { status: 400 });
+    }
     const action = body.action as string;
 
     if (!action) {
